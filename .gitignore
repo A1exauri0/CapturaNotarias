@@ -1,0 +1,27 @@
+## Visual Studio Ignore Rules
+.vs/
+**/[Bb]in/
+**/[Oo]bj/
+[Bb]in/
+[Oo]bj/
+packages/
+## User-specific files
+*.user
+*.userosscache
+*.sln.doccache
+*.suo
+*.userprefs
+
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+build/
+
+## Others
+*.log
+Thumbs.db
+.DS_Store
+node_modules/
+dist/
