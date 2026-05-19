@@ -8,15 +8,18 @@ namespace CapturaNotarias
     {
         public string? RutaServidorAuditoria { get; set; }
         public string? UltimaRutaVigilada { get; set; }
+        public string? NombrePC { get; set; }
     }
 
     public static class ModuloConfiguracion
     {
         public static string UsuarioActual = "";
         public static string NombreCompletoActual = "";
+        public static string TurnoActual = "";
         
         // El servidor donde caen los logs de auditoría general
-        public static string RutaServidorAuditoria = @"C:\ServidorLocal"; 
+        public static string RutaServidorAuditoria = @"C:\NOTARIAS"; 
+        public static string NombrePC = "";
 
         // Obtener ruta local donde guardaremos las preferencias del usuario (Servidor y ultima ruta)
         private static string ObtenerArchivoConfig()
@@ -37,7 +40,15 @@ namespace CapturaNotarias
                 try
                 {
                     string json = File.ReadAllText(archivo);
-                    return JsonConvert.DeserializeObject<ConfiguracionApp>(json) ?? new ConfiguracionApp();
+                    var config = JsonConvert.DeserializeObject<ConfiguracionApp>(json) ?? new ConfiguracionApp();
+                    
+                    if (!string.IsNullOrEmpty(config.RutaServidorAuditoria))
+                        RutaServidorAuditoria = config.RutaServidorAuditoria;
+                    
+                    if (!string.IsNullOrEmpty(config.NombrePC))
+                        NombrePC = config.NombrePC;
+
+                    return config;
                 }
                 catch { }
             }
@@ -48,6 +59,12 @@ namespace CapturaNotarias
         {
             try
             {
+                if (!string.IsNullOrEmpty(config.RutaServidorAuditoria))
+                    RutaServidorAuditoria = config.RutaServidorAuditoria;
+                
+                if (!string.IsNullOrEmpty(config.NombrePC))
+                    NombrePC = config.NombrePC;
+
                 string json = JsonConvert.SerializeObject(config, Formatting.Indented);
                 File.WriteAllText(ObtenerArchivoConfig(), json);
             }

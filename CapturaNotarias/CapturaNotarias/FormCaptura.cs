@@ -28,7 +28,9 @@ namespace CapturaNotarias
         {
             this.Text = "Captura de PDFs";
             this.Size = new Size(300, 180);
-            this.FormBorderStyle = FormBorderStyle.FixedToolWindow;
+            this.FormBorderStyle = FormBorderStyle.FixedSingle;
+            this.MinimizeBox = true;
+            this.MaximizeBox = false;
             this.StartPosition = FormStartPosition.Manual;
             // Ubicar en la esquina inferior derecha
             Rectangle workingArea = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 800, 600);
@@ -111,7 +113,7 @@ namespace CapturaNotarias
             });
 
             // Registrar en la auditoría asíncronamente
-            ModuloAuditoria.RegistrarAccion(notariaActual, "Capturado", e.Name ?? "Desconocido", "PDF Escaneado en " + e.FullPath);
+            ModuloAuditoria.RegistrarAccion(notariaActual, e.Name ?? "Desconocido", e.FullPath, "PDF Escaneado en " + e.FullPath);
         }
 
         private void BtnCerrarSesion_Click(object? sender, EventArgs e)
@@ -127,12 +129,13 @@ namespace CapturaNotarias
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (e.CloseReason == CloseReason.UserClosing && ModuloConfiguracion.UsuarioActual != "")
-            {
-                // Prevenir cierre accidental de la ventana por la 'X' si no han cerrado sesión
-                e.Cancel = true;
-                MessageBox.Show("Por favor, usa el botón 'Cerrar Sesión' para salir.", "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
+            // Apagar el watcher al cerrar
+            if (watcher != null) watcher.EnableRaisingEvents = false;
+
+            // Limpiar la sesión para obligar a iniciar sesión nuevamente
+            ModuloConfiguracion.UsuarioActual = "";
+            ModuloConfiguracion.NombreCompletoActual = "";
+
             base.OnFormClosing(e);
         }
     }

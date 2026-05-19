@@ -11,6 +11,22 @@ namespace CapturaNotarias
             // To customize application configuration such as set high DPI settings or default font,
             // see https://aka.ms/applicationconfiguration.
             ApplicationConfiguration.Initialize();
+
+            // Cargar configuración local al arrancar
+            ConfiguracionApp config = ModuloConfiguracion.CargarConfiguracion();
+
+            // Si no se ha asignado número a esta PC, abrir el formulario para pedirlo
+            if (string.IsNullOrEmpty(config.NombrePC))
+            {
+                using (FormNombrePC frm = new FormNombrePC())
+                {
+                    if (frm.ShowDialog() != DialogResult.OK)
+                    {
+                        return; // Salir del programa si no ingresó el nombre del PC
+                    }
+                }
+            }
+
             Application.Run(new FormLogin());
         }
     }

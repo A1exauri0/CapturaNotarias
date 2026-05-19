@@ -17,13 +17,13 @@ namespace CapturaNotarias
 
         public FormLogin()
         {
-            this.Text = "Inicio de Sesión - Captura";
+            this.Text = "Captura Notarias";
             this.Size = new Size(360, 260);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
 
-            Label lblTitle = new Label() { Text = "Sistema de Captura", Font = new Font("Arial", 14, FontStyle.Bold), Location = new Point(80, 20), AutoSize = true };
+            Label lblTitle = new Label() { Text = "Captura Notarias", Font = new Font("Arial", 14, FontStyle.Bold), Location = new Point(20, 18), AutoSize = true };
             
             Label lblUser = new Label() { Text = "Usuario:", Location = new Point(40, 70), AutoSize = true };
             txtUsername = new TextBox() { Location = new Point(120, 67), Width = 150 };
@@ -33,18 +33,24 @@ namespace CapturaNotarias
 
             btnLogin = new Button() { Text = "Iniciar Sesión", Location = new Point(120, 150), Width = 150, BackColor = Color.LightBlue, FlatStyle = FlatStyle.Flat };
             
-            btnConfig = new Button() { Text = "⚙ Opciones", Location = new Point(10, 10), Width = 90, Height = 30, FlatStyle = FlatStyle.Flat };
+            btnConfig = new Button() { Text = "⚙ Opciones", Location = new Point(245, 15), Width = 85, Height = 28, FlatStyle = FlatStyle.Flat };
 
             // Configurar el menú desplegable (ContextMenuStrip) en el botón de engranaje
             menuConfig = new ContextMenuStrip();
             ToolStripMenuItem itemConfigServidor = new ToolStripMenuItem("⚙ Configurar Servidor...");
             ToolStripMenuItem itemAdminUsuarios = new ToolStripMenuItem("👥 Administrar Usuarios...");
+            ToolStripMenuItem itemAuditoria = new ToolStripMenuItem("📊 Ver Productividad y Auditoría...");
+            ToolStripMenuItem itemExcel = new ToolStripMenuItem("📊 Descargar Reporte Excel...");
             
             itemConfigServidor.Click += BtnConfig_Click;
             itemAdminUsuarios.Click += BtnUsuarios_Click;
+            itemAuditoria.Click += BtnAuditoria_Click;
+            itemExcel.Click += ItemExcel_Click;
             
             menuConfig.Items.Add(itemConfigServidor);
             menuConfig.Items.Add(itemAdminUsuarios);
+            menuConfig.Items.Add(itemAuditoria);
+            menuConfig.Items.Add(itemExcel);
 
             btnConfig.Click += (s, e) => {
                 menuConfig.Show(btnConfig, new Point(0, btnConfig.Height));
@@ -170,6 +176,59 @@ namespace CapturaNotarias
             }
         }
 
+        private void BtnAuditoria_Click(object? sender, EventArgs e)
+        {
+            // Opcional: También podrías pedir PIN maestro aquí si no quieres que cualquiera lo vea
+            using (FormAuditoria frm = new FormAuditoria())
+            {
+                frm.ShowDialog();
+            }
+        }
+        private void ItemExcel_Click(object? sender, EventArgs e)
+        {
+            // Asegurarnos de que el archivo exista en la ruta de red
+            InicializarUsuariosJson();
+
+            string pinMaestroCorrecto = "2003";
+            string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
+            
+            if (File.Exists(rutaUsuarios))
+            {
+                try
+                {
+                    string json = File.ReadAllText(rutaUsuarios);
+                    var datos = JsonConvert.DeserializeObject<DatosUsuarios>(json);
+                    if (datos != null && !string.IsNullOrEmpty(datos.PinMaestro))
+                    {
+                        pinMaestroCorrecto = datos.PinMaestro;
+                    }
+                }
+                catch { }
+            }
+
+            // Solicitar el PIN maestro al usuario
+            Form prompt = new Form() { Width = 300, Height = 150, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Acceso Autorizado", StartPosition = FormStartPosition.CenterScreen };
+            Label textLabel = new Label() { Left = 20, Top = 10, Width = 250, Text = "Ingrese el PIN Maestro:" };
+            TextBox textBox = new TextBox() { Left = 20, Top = 35, Width = 240, PasswordChar = '*', MaxLength = 8 };
+            Button confirmation = new Button() { Text = "Aceptar", Left = 160, Width = 100, Top = 70, DialogResult = DialogResult.OK };
+            prompt.Controls.Add(textLabel);
+            prompt.Controls.Add(textBox);
+            prompt.Controls.Add(confirmation);
+            prompt.AcceptButton = confirmation;
+
+            if (prompt.ShowDialog() == DialogResult.OK)
+            {
+                if (textBox.Text == pinMaestroCorrecto)
+                {
+                    var todos = ModuloAuditoria.ObtenerRegistrosTodos();
+                    ModuloAuditoria.ExportarExcel(todos);
+                }
+                else
+                {
+                    MessageBox.Show("PIN Maestro incorrecto.", "Acceso Denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
         private void BtnLogin_Click(object? sender, EventArgs e)
         {
             string user = txtUsername.Text.Trim();
@@ -193,6 +252,7 @@ namespace CapturaNotarias
                 {
                     ModuloConfiguracion.UsuarioActual = "admin";
                     ModuloConfiguracion.NombreCompletoActual = "Administrador Local";
+                    ModuloConfiguracion.TurnoActual = "Matutino";
                     IniciarApp();
                     return;
                 }
@@ -212,6 +272,7 @@ namespace CapturaNotarias
                         {
                             ModuloConfiguracion.UsuarioActual = u.NombreUsuario;
                             ModuloConfiguracion.NombreCompletoActual = u.NombreCompleto ?? u.NombreUsuario;
+                            ModuloConfiguracion.TurnoActual = u.Turno ?? "Matutino";
                             IniciarApp();
                             return;
                         }
