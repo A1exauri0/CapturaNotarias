@@ -108,9 +108,20 @@ namespace CapturaNotarias
                     string rutaMonitoreo = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "MonitoreoCaptura", nombreFinal);
                     if (Directory.Exists(rutaMonitoreo))
                     {
-                        MessageBox.Show($"El número de equipo '{nombreFinal}' ya está registrado en el servidor.\nPor favor, asigne un número diferente para evitar duplicados.", "Identidad Duplicada", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        txtNombrePC.Focus();
-                        return;
+                        var resultado = MessageBox.Show(
+                            $"El número de equipo '{nombreFinal}' ya tiene una carpeta registrada en el servidor.\n\n" +
+                            "¿Desea reutilizar esta carpeta para esta PC?\n" +
+                            "(Presione SÍ si se trata de una reinstalación/actualización en el mismo equipo, o NO para elegir otro número).",
+                            "Identidad Registrada",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Question
+                        );
+
+                        if (resultado == DialogResult.No)
+                        {
+                            txtNombrePC.Focus();
+                            return;
+                        }
                     }
 
                     // Crear la carpeta del equipo de una vez

@@ -59,7 +59,29 @@ namespace CapturaNotarias
         {
             try
             {
+                // Si no hay un usuario activo logueado en la aplicación, ignoramos el registro
+                if (string.IsNullOrEmpty(ModuloConfiguracion.UsuarioActual))
+                {
+                    return;
+                }
+
                 string pcNombre = string.IsNullOrEmpty(ModuloConfiguracion.NombrePC) ? Environment.MachineName : ModuloConfiguracion.NombrePC;
+
+                // Si el nombre del archivo empieza con "PC" seguido de dígitos (ej: PC02...),
+                // validamos que coincida con el número de esta PC para evitar registrar capturas de otros equipos en red.
+                string archivoUpper = archivo.ToUpper();
+                var coincidenciaPc = System.Text.RegularExpressions.Regex.Match(archivoUpper, @"^PC(\d+)");
+                if (coincidenciaPc.Success)
+                {
+                    string prefijoArchivo = coincidenciaPc.Value; // Ej: "PC02"
+                    string pcNombreNorm = pcNombre.Replace("-", "").Replace(" ", "").ToUpper(); // Ej: "PC-02" -> "PC02"
+                    if (pcNombreNorm != prefijoArchivo && !pcNombreNorm.Contains(prefijoArchivo) && !prefijoArchivo.Contains(pcNombreNorm))
+                    {
+                        // No pertenece a este equipo, ignoramos el evento de red silenciosamente
+                        return;
+                    }
+                }
+
                 string localIp = "";
                 try
                 {
@@ -198,9 +220,11 @@ namespace CapturaNotarias
                 return;
             }
 
-            // Agrupar los datos por Fecha (YYYY-MM-DD) -> PC -> IP -> Usuario -> Turno -> (ConteoPdf, SumaPaginas)
-            var datosPorFecha = new Dictionary<string, Dictionary<string, Dictionary<string, Dictionary<string, Dictionary<string, (int pdfs, int paginas)>>>>>();
+            // Filtrar registros inválidos (sin usuario) para evitar filas vacías en el reporte Excel
+            datos = datos.Where(r => !string.IsNullOrEmpty(r.Usuario) || !string.IsNullOrEmpty(r.NombreCompleto)).ToList();
 
+            // 1. Agrupar todos los datos por Fecha (YYYY-MM-DD)
+            var registrosPorFecha = new Dictionary<string, List<RegistroAuditoria>>();
             foreach (var reg in datos)
             {
                 string fecha = "Sin Fecha";
@@ -208,39 +232,135 @@ namespace CapturaNotarias
                 {
                     fecha = reg.FechaHora.Substring(0, 10);
                 }
-
-                if (!datosPorFecha.ContainsKey(fecha))
+                if (!registrosPorFecha.ContainsKey(fecha))
                 {
-                    datosPorFecha[fecha] = new Dictionary<string, Dictionary<string, Dictionary<string, Dictionary<string, (int pdfs, int paginas)>>>>();
+                    registrosPorFecha[fecha] = new List<RegistroAuditoria>();
+                }
+                registrosPorFecha[fecha].Add(reg);
+            }
+
+            // 2. Para cada fecha, deduplicar los registros de forma global por archivo original
+            // para que no se dupliquen entre diferentes PCs o usuarios que vigilan la misma carpeta.
+            var registrosDeduplicados = new List<RegistroAuditoria>();
+            foreach (var fecha in registrosPorFecha.Keys)
+            {
+                var grupoArchivos = registrosPorFecha[fecha]
+                    .GroupBy(r => r.ArchivoOriginal ?? "Desconocido", StringComparer.OrdinalIgnoreCase);
+
+                foreach (var grupo in grupoArchivos)
+                {
+                    if (grupo.Count() == 1)
+                    {
+                        registrosDeduplicados.Add(grupo.First());
+                    }
+                    else
+                    {
+                        // Seleccionar el registro óptimo basándonos en el prefijo del archivo o la hora de registro
+                        string nombreArchivo = grupo.Key;
+                        var coincidenciaPc = System.Text.RegularExpressions.Regex.Match(nombreArchivo, @"^PC(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        
+                        RegistroAuditoria? seleccionado = null;
+                        if (coincidenciaPc.Success)
+                        {
+                            string prefijoPC = coincidenciaPc.Value.ToUpper(); // Ej: "PC12" o "PC04"
+                            seleccionado = grupo.FirstOrDefault(r => {
+                                if (string.IsNullOrEmpty(r.PC)) return false;
+                                string pcNormalizada = r.PC.Replace("-", "").Replace(" ", "").ToUpper(); // Ej: "PC-04" -> "PC04"
+                                return pcNormalizada == prefijoPC || pcNormalizada.Contains(prefijoPC) || prefijoPC.Contains(pcNormalizada);
+                            });
+                        }
+
+                        // Si no hay coincidencia de prefijo con ninguna PC del grupo, o el archivo no tiene formato PCXX (ej. 0001.pdf),
+                        // nos quedamos con el registro que ocurrió primero (la hora más temprana).
+                        if (seleccionado == null)
+                        {
+                            seleccionado = grupo
+                                .OrderBy(r => string.IsNullOrEmpty(r.FechaHora) ? "9999-12-31" : r.FechaHora)
+                                .First();
+                        }
+
+                        // Conservar el mayor número de páginas si en otros registros se leyó de forma completa
+                        int maximoPaginas = grupo.Max(r => r.Paginas);
+                        if (maximoPaginas > seleccionado.Paginas)
+                        {
+                            seleccionado.Paginas = maximoPaginas;
+                        }
+
+                        registrosDeduplicados.Add(seleccionado);
+                    }
+                }
+            }
+
+            // 3. Agrupar los registros deduplicados por Fecha -> PC -> IP -> Usuario -> Turno para su procesamiento
+            var registrosAgrupados = new Dictionary<string, Dictionary<string, Dictionary<string, Dictionary<string, Dictionary<string, List<RegistroAuditoria>>>>>>();
+
+            foreach (var reg in registrosDeduplicados)
+            {
+                string fecha = "Sin Fecha";
+                if (!string.IsNullOrEmpty(reg.FechaHora) && reg.FechaHora.Length >= 10)
+                {
+                    fecha = reg.FechaHora.Substring(0, 10);
                 }
 
-                string pc = reg.PC ?? "Desconocido";
-                if (!datosPorFecha[fecha].ContainsKey(pc))
+                if (!registrosAgrupados.ContainsKey(fecha))
+                {
+                    registrosAgrupados[fecha] = new Dictionary<string, Dictionary<string, Dictionary<string, Dictionary<string, List<RegistroAuditoria>>>>>();
+                }
+
+                string pc = string.IsNullOrEmpty(reg.PC) ? "Desconocido" : reg.PC;
+                if (!registrosAgrupados[fecha].ContainsKey(pc))
+                {
+                    registrosAgrupados[fecha][pc] = new Dictionary<string, Dictionary<string, Dictionary<string, List<RegistroAuditoria>>>>();
+                }
+
+                string ip = string.IsNullOrEmpty(reg.IP) ? "Desconocido" : reg.IP;
+                if (!registrosAgrupados[fecha][pc].ContainsKey(ip))
+                {
+                    registrosAgrupados[fecha][pc][ip] = new Dictionary<string, Dictionary<string, List<RegistroAuditoria>>>();
+                }
+
+                string usuario = string.IsNullOrEmpty(reg.NombreCompleto) ? (string.IsNullOrEmpty(reg.Usuario) ? "Desconocido" : reg.Usuario) : reg.NombreCompleto;
+                if (!registrosAgrupados[fecha][pc][ip].ContainsKey(usuario))
+                {
+                    registrosAgrupados[fecha][pc][ip][usuario] = new Dictionary<string, List<RegistroAuditoria>>();
+                }
+
+                string turno = string.IsNullOrEmpty(reg.Turno) ? "Matutino" : reg.Turno;
+                if (!registrosAgrupados[fecha][pc][ip][usuario].ContainsKey(turno))
+                {
+                    registrosAgrupados[fecha][pc][ip][usuario][turno] = new List<RegistroAuditoria>();
+                }
+
+                registrosAgrupados[fecha][pc][ip][usuario][turno].Add(reg);
+            }
+
+            // 4. Crear el diccionario final con los totales ya procesados y deduplicados
+            var datosPorFecha = new Dictionary<string, Dictionary<string, Dictionary<string, Dictionary<string, Dictionary<string, (int pdfs, int paginas)>>>>>();
+
+            foreach (var fecha in registrosAgrupados.Keys)
+            {
+                datosPorFecha[fecha] = new Dictionary<string, Dictionary<string, Dictionary<string, Dictionary<string, (int pdfs, int paginas)>>>>();
+                foreach (var pc in registrosAgrupados[fecha].Keys)
                 {
                     datosPorFecha[fecha][pc] = new Dictionary<string, Dictionary<string, Dictionary<string, (int pdfs, int paginas)>>>();
-                }
+                    foreach (var ip in registrosAgrupados[fecha][pc].Keys)
+                    {
+                        datosPorFecha[fecha][pc][ip] = new Dictionary<string, Dictionary<string, (int pdfs, int paginas)>>();
+                        foreach (var usuario in registrosAgrupados[fecha][pc][ip].Keys)
+                        {
+                            datosPorFecha[fecha][pc][ip][usuario] = new Dictionary<string, (int pdfs, int paginas)>();
+                            foreach (var turno in registrosAgrupados[fecha][pc][ip][usuario].Keys)
+                            {
+                                var listaRegs = registrosAgrupados[fecha][pc][ip][usuario][turno];
+                                
+                                int totalPdfs = listaRegs.Count;
+                                int totalPaginas = listaRegs.Sum(r => r.Paginas > 0 ? r.Paginas : 1);
 
-                string ip = reg.IP ?? "Desconocido";
-                if (!datosPorFecha[fecha][pc].ContainsKey(ip))
-                {
-                    datosPorFecha[fecha][pc][ip] = new Dictionary<string, Dictionary<string, (int pdfs, int paginas)>>();
+                                datosPorFecha[fecha][pc][ip][usuario][turno] = (totalPdfs, totalPaginas);
+                            }
+                        }
+                    }
                 }
-
-                string usuario = reg.NombreCompleto ?? reg.Usuario ?? "Desconocido";
-                if (!datosPorFecha[fecha][pc][ip].ContainsKey(usuario))
-                {
-                    datosPorFecha[fecha][pc][ip][usuario] = new Dictionary<string, (int pdfs, int paginas)>();
-                }
-
-                string turno = reg.Turno ?? "Matutino";
-                if (!datosPorFecha[fecha][pc][ip][usuario].ContainsKey(turno))
-                {
-                    datosPorFecha[fecha][pc][ip][usuario][turno] = (0, 0);
-                }
-
-                var actual = datosPorFecha[fecha][pc][ip][usuario][turno];
-                int pgs = reg.Paginas > 0 ? reg.Paginas : 1;
-                datosPorFecha[fecha][pc][ip][usuario][turno] = (actual.pdfs + 1, actual.paginas + pgs);
             }
 
             try
