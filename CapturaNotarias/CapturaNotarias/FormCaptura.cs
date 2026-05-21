@@ -16,12 +16,14 @@ namespace CapturaNotarias
         private int contadorSesion = 0;
         private ConfiguracionApp configLocal;
         private string notariaActual = "General"; // Podría extraerse de la ruta
+        private System.Windows.Forms.Timer? temporizadorSincronizacion;
 
         public FormCaptura()
         {
             configLocal = ModuloConfiguracion.CargarConfiguracion();
             InitializeComponent();
             ConfigurarWatcher(configLocal.UltimaRutaVigilada);
+            IniciarTemporizadorSincronizacion();
         }
 
         private void InitializeComponent()
@@ -127,8 +129,47 @@ namespace CapturaNotarias
             this.Close();
         }
 
+        private void IniciarTemporizadorSincronizacion()
+        {
+            temporizadorSincronizacion = new System.Windows.Forms.Timer();
+            // 1 hora = 60 minutos * 60 segundos * 1000 milisegundos = 3,600,000 milisegundos
+            temporizadorSincronizacion.Interval = 3600000;
+            temporizadorSincronizacion.Tick += TemporizadorSincronizacion_Tick;
+            temporizadorSincronizacion.Start();
+
+            // Ejecutar una primera sincronización silenciosa en segundo plano al iniciar
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    ModuloAuditoria.EnviarAuditoriasAlServidorCentral(true);
+                }
+                catch { }
+            });
+        }
+
+        private void TemporizadorSincronizacion_Tick(object? sender, EventArgs e)
+        {
+            // Ejecutar en segundo plano para no congelar la interfaz de usuario
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    ModuloAuditoria.EnviarAuditoriasAlServidorCentral(true);
+                }
+                catch { }
+            });
+        }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            // Detener y liberar el temporizador al cerrar el formulario
+            if (temporizadorSincronizacion != null)
+            {
+                temporizadorSincronizacion.Stop();
+                temporizadorSincronizacion.Dispose();
+            }
+
             // Apagar el watcher al cerrar
             if (watcher != null) watcher.EnableRaisingEvents = false;
 
