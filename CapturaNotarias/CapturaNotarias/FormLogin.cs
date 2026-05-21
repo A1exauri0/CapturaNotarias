@@ -41,16 +41,22 @@ namespace CapturaNotarias
             ToolStripMenuItem itemAdminUsuarios = new ToolStripMenuItem("👥 Administrar Usuarios...");
             ToolStripMenuItem itemAuditoria = new ToolStripMenuItem("📊 Ver Productividad y Auditoría...");
             ToolStripMenuItem itemExcel = new ToolStripMenuItem("📊 Descargar Reporte Excel...");
+            ToolStripMenuItem itemEnviarArchivos = new ToolStripMenuItem("📤 Enviar Auditorías a Servidor Central...");
+            ToolStripMenuItem itemDiagnostico = new ToolStripMenuItem("🔍 Diagnóstico de Conexión de PCs...");
             
             itemConfigServidor.Click += BtnConfig_Click;
             itemAdminUsuarios.Click += BtnUsuarios_Click;
             itemAuditoria.Click += BtnAuditoria_Click;
             itemExcel.Click += ItemExcel_Click;
+            itemEnviarArchivos.Click += ItemEnviarArchivos_Click;
+            itemDiagnostico.Click += ItemDiagnostico_Click;
             
             menuConfig.Items.Add(itemConfigServidor);
             menuConfig.Items.Add(itemAdminUsuarios);
             menuConfig.Items.Add(itemAuditoria);
             menuConfig.Items.Add(itemExcel);
+            menuConfig.Items.Add(itemEnviarArchivos);
+            menuConfig.Items.Add(itemDiagnostico);
 
             btnConfig.Click += (s, e) => {
                 menuConfig.Show(btnConfig, new Point(0, btnConfig.Height));
@@ -229,6 +235,59 @@ namespace CapturaNotarias
                 }
             }
         }
+
+        private void ItemEnviarArchivos_Click(object? sender, EventArgs e)
+        {
+            // Solicitar el PIN maestro al usuario para autorizar la transferencia
+            InicializarUsuariosJson();
+
+            string pinMaestroCorrecto = "2003";
+            string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
+            
+            if (File.Exists(rutaUsuarios))
+            {
+                try
+                {
+                    string json = File.ReadAllText(rutaUsuarios);
+                    var datos = JsonConvert.DeserializeObject<DatosUsuarios>(json);
+                    if (datos != null && !string.IsNullOrEmpty(datos.PinMaestro))
+                    {
+                        pinMaestroCorrecto = datos.PinMaestro;
+                    }
+                }
+                catch { }
+            }
+
+            Form formularioPrompt = new Form() { Width = 300, Height = 150, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Acceso Autorizado", StartPosition = FormStartPosition.CenterScreen };
+            Label etiquetaTexto = new Label() { Left = 20, Top = 10, Width = 250, Text = "Ingrese el PIN Maestro:" };
+            TextBox cajaTexto = new TextBox() { Left = 20, Top = 35, Width = 240, PasswordChar = '*', MaxLength = 8 };
+            Button botonConfirmacion = new Button() { Text = "Aceptar", Left = 160, Width = 100, Top = 70, DialogResult = DialogResult.OK };
+            formularioPrompt.Controls.Add(etiquetaTexto);
+            formularioPrompt.Controls.Add(cajaTexto);
+            formularioPrompt.Controls.Add(botonConfirmacion);
+            formularioPrompt.AcceptButton = botonConfirmacion;
+
+            if (formularioPrompt.ShowDialog() == DialogResult.OK)
+            {
+                if (cajaTexto.Text == pinMaestroCorrecto)
+                {
+                    ModuloAuditoria.EnviarAuditoriasAlServidorCentral();
+                }
+                else
+                {
+                    MessageBox.Show("PIN Maestro incorrecto.", "Acceso Denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        private void ItemDiagnostico_Click(object? sender, EventArgs e)
+        {
+            using (FormDiagnostico frm = new FormDiagnostico())
+            {
+                frm.ShowDialog();
+            }
+        }
+
         private void BtnLogin_Click(object? sender, EventArgs e)
         {
             string user = txtUsername.Text.Trim();
