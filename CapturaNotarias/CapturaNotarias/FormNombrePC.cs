@@ -17,37 +17,38 @@ namespace CapturaNotarias
         private void InitializeComponent()
         {
             this.Text = "Identificación de Equipo";
-            this.Size = new System.Drawing.Size(320, 160);
+            this.Size = new System.Drawing.Size(420, 210);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.TopMost = true;
 
-            var fontGeneral = new System.Drawing.Font("Arial", 10F, System.Drawing.FontStyle.Regular);
+            var fontGeneral = new System.Drawing.Font("Arial", 11F, System.Drawing.FontStyle.Regular);
 
             Label lblInstruccion = new Label()
             {
                 Text = "Ingrese el NÚMERO asignado a esta PC:",
-                Location = new System.Drawing.Point(15, 12),
-                Size = new System.Drawing.Size(290, 20),
+                Location = new System.Drawing.Point(25, 20),
+                Size = new System.Drawing.Size(370, 25),
                 Font = fontGeneral
             };
 
             txtNombrePC = new TextBox()
             {
-                Location = new System.Drawing.Point(15, 42),
-                Width = 270,
-                Font = fontGeneral
+                Location = new System.Drawing.Point(25, 55),
+                Width = 350,
+                Font = new System.Drawing.Font("Arial", 12F, System.Drawing.FontStyle.Regular)
             };
             txtNombrePC.KeyPress += TxtNombrePC_KeyPress;
 
             btnGuardar = new Button()
             {
                 Text = "Guardar",
-                Location = new System.Drawing.Point(185, 78),
-                Size = new System.Drawing.Size(100, 30),
-                FlatStyle = FlatStyle.Flat
+                Location = new System.Drawing.Point(255, 105),
+                Size = new System.Drawing.Size(120, 38),
+                FlatStyle = FlatStyle.Flat,
+                Font = fontGeneral
             };
             btnGuardar.Click += BtnGuardar_Click;
 

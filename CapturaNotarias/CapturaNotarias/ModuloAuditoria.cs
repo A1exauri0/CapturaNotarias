@@ -55,14 +55,14 @@ namespace CapturaNotarias
             return 1; // Fallback
         }
 
-        public static void RegistrarAccion(string notaria, string archivo, string rutaCompleta, string detalles = "")
+        public static string RegistrarAccion(string notaria, string archivo, string rutaCompleta, string detalles = "")
         {
             try
             {
                 // Si no hay un usuario activo logueado en la aplicación, ignoramos el registro
                 if (string.IsNullOrEmpty(ModuloConfiguracion.UsuarioActual))
                 {
-                    return;
+                    return "NO_USER";
                 }
 
                 string pcNombre = string.IsNullOrEmpty(ModuloConfiguracion.NombrePC) ? Environment.MachineName : ModuloConfiguracion.NombrePC;
@@ -78,7 +78,7 @@ namespace CapturaNotarias
                     if (pcNombreNorm != prefijoArchivo && !pcNombreNorm.Contains(prefijoArchivo) && !prefijoArchivo.Contains(pcNombreNorm))
                     {
                         // No pertenece a este equipo, ignoramos el evento de red silenciosamente
-                        return;
+                        return "PC_MISMATCH";
                     }
                 }
 
@@ -153,11 +153,13 @@ namespace CapturaNotarias
                 string jsonFinal = JsonConvert.SerializeObject(auditoria, Formatting.Indented);
                 
                 // Intentamos guardar con reintentos silenciosos
+                bool guardado = false;
                 for (int i = 0; i < 3; i++)
                 {
                     try
                     {
                         File.WriteAllText(rutaJson, jsonFinal);
+                        guardado = true;
                         break;
                     }
                     catch
@@ -165,10 +167,12 @@ namespace CapturaNotarias
                         System.Threading.Thread.Sleep(500);
                     }
                 }
+
+                return guardado ? "OK" : "ERROR";
             }
             catch
             {
-                // En segundo plano no interrumpimos con MsgBox
+                return "ERROR";
             }
         }
 
@@ -483,6 +487,15 @@ namespace CapturaNotarias
 
         public static void EnviarAuditoriasAlServidorCentral(bool silencioso = false)
         {
+            if (!ModuloConfiguracion.ActivarEnvioAuditoria)
+            {
+                if (!silencioso)
+                {
+                    MessageBox.Show("El envío de auditorías al servidor central está desactivado en la configuración de esta PC.", "Función Desactivada", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                return;
+            }
+
             string destinoBase = @"\\172.40.5.84\ssdirec\NOTARIAS";
 
             try

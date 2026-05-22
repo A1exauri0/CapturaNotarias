@@ -9,6 +9,7 @@ namespace CapturaNotarias
         public string? RutaServidorAuditoria { get; set; }
         public string? UltimaRutaVigilada { get; set; }
         public string? NombrePC { get; set; }
+        public bool ActivarEnvioAuditoria { get; set; } = false;
     }
 
     public static class ModuloConfiguracion
@@ -20,6 +21,7 @@ namespace CapturaNotarias
         // El servidor donde caen los logs de auditoría general
         public static string RutaServidorAuditoria = @"\\192.168.1.10\NOTARIAS"; 
         public static string NombrePC = "";
+        public static bool ActivarEnvioAuditoria = false;
 
         // Obtener ruta local donde guardaremos las preferencias del usuario (Servidor y ultima ruta)
         private static string ObtenerArchivoConfig()
@@ -48,6 +50,8 @@ namespace CapturaNotarias
                     if (!string.IsNullOrEmpty(config.NombrePC))
                         NombrePC = config.NombrePC;
 
+                    ActivarEnvioAuditoria = config.ActivarEnvioAuditoria;
+
                     return config;
                 }
                 catch { }
@@ -64,6 +68,8 @@ namespace CapturaNotarias
                 
                 if (!string.IsNullOrEmpty(config.NombrePC))
                     NombrePC = config.NombrePC;
+
+                ActivarEnvioAuditoria = config.ActivarEnvioAuditoria;
 
                 string json = JsonConvert.SerializeObject(config, Formatting.Indented);
                 File.WriteAllText(ObtenerArchivoConfig(), json);
