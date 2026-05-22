@@ -63,6 +63,16 @@ namespace CapturaNotarias
             };
             btnLogin.Click += BtnLogin_Click;
 
+            // Etiqueta de advertencia de cierre
+            Label lblAdvertencia = new Label() 
+            { 
+                Text = "⚠️ Si cierra la aplicación, no se enviarán datos al servidor.", 
+                AutoSize = true, 
+                Location = new Point(20, 190), 
+                Font = new Font("Arial", 8f, FontStyle.Italic), 
+                ForeColor = Color.Firebrick 
+            };
+
             this.Controls.Add(lblTitle);
             this.Controls.Add(lblUser);
             this.Controls.Add(txtUsername);
@@ -70,6 +80,7 @@ namespace CapturaNotarias
             this.Controls.Add(txtPin);
             this.Controls.Add(btnLogin);
             this.Controls.Add(btnConfig);
+            this.Controls.Add(lblAdvertencia);
             
             this.AcceptButton = btnLogin;
         }
@@ -367,6 +378,27 @@ namespace CapturaNotarias
             }
             // Intentar inicializar al cargar la app si ya hay una ruta configurada
             InicializarUsuariosJson();
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            // Mostrar advertencia si el usuario está cerrando la aplicación manualmente
+            if (e.CloseReason == CloseReason.UserClosing)
+            {
+                var resultado = MessageBox.Show(
+                    "Si cierra la aplicación, se detendrá el monitoreo y ya no se enviarán datos de auditoría al servidor.\n\n¿Está seguro de que desea salir?",
+                    "Confirmación de Salida",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning
+                );
+
+                if (resultado == DialogResult.No)
+                {
+                    e.Cancel = true; // Cancelar el cierre de la ventana
+                    return;
+                }
+            }
+            base.OnFormClosing(e);
         }
     }
 }
