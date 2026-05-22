@@ -73,7 +73,7 @@ namespace CapturaNotarias
         {
             if (string.IsNullOrEmpty(ruta) || !Directory.Exists(ruta)) return;
 
-            // Extraer posible nombre de notaria de la ruta (Ej. C:\NOTARIAS\NOTARIA 71\...)
+            // Extraer posible nombre de notaria de la ruta (Ej. \\192.168.1.10\NOTARIAS\NOTARIA 71\...)
             string[] partes = ruta.Split(Path.DirectorySeparatorChar);
             if (partes.Length >= 2)
             {

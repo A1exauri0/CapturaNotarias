@@ -18,7 +18,7 @@ namespace CapturaNotarias
         public static string TurnoActual = "";
         
         // El servidor donde caen los logs de auditoría general
-        public static string RutaServidorAuditoria = @"C:\NOTARIAS"; 
+        public static string RutaServidorAuditoria = @"\\192.168.1.10\NOTARIAS"; 
         public static string NombrePC = "";
 
         // Obtener ruta local donde guardaremos las preferencias del usuario (Servidor y ultima ruta)
