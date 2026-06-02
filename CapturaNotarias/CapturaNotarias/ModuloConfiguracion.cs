@@ -11,6 +11,7 @@ namespace CapturaNotarias
         public string? NombrePC { get; set; }
         public string? LugarTrabajo { get; set; }
         public string? UrlApi { get; set; } = "http://localhost:8000/api/digitalizacion/registrar";
+        public bool ActivarEnvioAuditoria { get; set; } = false;
     }
 
     public static class ModuloConfiguracion
@@ -24,6 +25,7 @@ namespace CapturaNotarias
         public static string NombrePC = "";
         public static string LugarTrabajo = "";
         public static string UrlApi = "http://localhost:8000/api/digitalizacion/registrar";
+        public static bool ActivarEnvioAuditoria = false;
 
         // Obtener ruta local donde guardaremos las preferencias del usuario (Servidor y ultima ruta)
         private static string ObtenerArchivoConfig()
@@ -70,6 +72,8 @@ namespace CapturaNotarias
                         UrlApi = config.UrlApi;
                     }
 
+                    ActivarEnvioAuditoria = config.ActivarEnvioAuditoria;
+
                     return config;
                 }
                 catch { }
@@ -96,6 +100,8 @@ namespace CapturaNotarias
 
                 if (!string.IsNullOrEmpty(config.UrlApi))
                     UrlApi = config.UrlApi;
+
+                ActivarEnvioAuditoria = config.ActivarEnvioAuditoria;
 
                 string json = JsonConvert.SerializeObject(config, Formatting.Indented);
                 File.WriteAllText(ObtenerArchivoConfig(), json);

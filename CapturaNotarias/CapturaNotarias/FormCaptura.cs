@@ -29,23 +29,23 @@ namespace CapturaNotarias
         private void InitializeComponent()
         {
             this.Text = "Captura de PDFs";
-            this.Size = new Size(300, 180);
+            this.Size = new Size(420, 240);
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MinimizeBox = true;
             this.MaximizeBox = false;
             this.StartPosition = FormStartPosition.Manual;
             // Ubicar en la esquina inferior derecha
             Rectangle workingArea = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 800, 600);
-            this.Location = new Point(workingArea.Width - this.Width - 10, workingArea.Height - this.Height - 10);
+            this.Location = new Point(workingArea.Width - this.Width - 15, workingArea.Height - this.Height - 15);
             this.TopMost = true; // Siempre visible
             this.BackColor = Color.WhiteSmoke;
 
-            lblUsuario = new Label() { Text = "Usuario: " + ModuloConfiguracion.UsuarioActual, AutoSize = true, Location = new Point(10, 10), Font = new Font("Arial", 9, FontStyle.Bold) };
-            lblRuta = new Label() { Text = "Vigilando: Ninguna ruta", AutoSize = false, Location = new Point(10, 35), Size = new Size(260, 30), Font = new Font("Arial", 8), ForeColor = Color.DimGray };
-            lblContador = new Label() { Text = "Capturados hoy: 0", AutoSize = true, Location = new Point(10, 70), Font = new Font("Arial", 10, FontStyle.Bold), ForeColor = Color.MediumSeaGreen };
+            lblUsuario = new Label() { Text = "Usuario: " + ModuloConfiguracion.UsuarioActual, AutoSize = true, Location = new Point(20, 20), Font = new Font("Arial", 11, FontStyle.Bold) };
+            lblRuta = new Label() { Text = "Vigilando: Ninguna ruta", AutoSize = false, Location = new Point(20, 50), Size = new Size(380, 45), Font = new Font("Arial", 9.5F), ForeColor = Color.DimGray };
+            lblContador = new Label() { Text = "Capturados hoy: 0", AutoSize = true, Location = new Point(20, 105), Font = new Font("Arial", 13, FontStyle.Bold), ForeColor = Color.MediumSeaGreen };
 
-            btnCambiarRuta = new Button() { Text = "📂 Elegir Carpeta", Location = new Point(10, 100), Size = new Size(120, 30), FlatStyle = FlatStyle.Flat };
-            btnCerrarSesion = new Button() { Text = "Cerrar Sesión", Location = new Point(140, 100), Size = new Size(130, 30), FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Color.Firebrick };
+            btnCambiarRuta = new Button() { Text = "📂 Elegir Carpeta", Location = new Point(20, 145), Size = new Size(170, 38), FlatStyle = FlatStyle.Flat, Font = new Font("Arial", 10.5F) };
+            btnCerrarSesion = new Button() { Text = "Cerrar Sesión", Location = new Point(210, 145), Size = new Size(170, 38), FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Color.Firebrick, Font = new Font("Arial", 10.5F) };
 
             btnCambiarRuta.Click += BtnCambiarRuta_Click;
             btnCerrarSesion.Click += BtnCerrarSesion_Click;
@@ -108,14 +108,45 @@ namespace CapturaNotarias
         private void Watcher_Created(object sender, FileSystemEventArgs e)
         {
             // Este evento ocurre en un hilo en segundo plano
+            string archivo = e.Name ?? "Desconocido";
+            string resultado = ModuloAuditoria.RegistrarAccion(notariaActual, archivo, e.FullPath, "PDF Escaneado en " + e.FullPath);
+
             this.Invoke((MethodInvoker)delegate
             {
-                contadorSesion++;
-                lblContador.Text = "Capturados hoy: " + contadorSesion;
+                if (resultado == "OK")
+                {
+                    contadorSesion++;
+                    lblContador.Text = "Capturados hoy: " + contadorSesion;
+                }
+                else if (resultado == "PC_MISMATCH")
+                {
+                    MessageBox.Show(
+                        $"Se detectó el archivo '{archivo}', pero NO se registró en tu cuenta porque el nombre del archivo no coincide con esta PC ({ModuloConfiguracion.NombrePC ?? "Sin nombre"}).\n\n" +
+                        "Verifica que el nombre de la PC configurado o el prefijo de archivo asignado en tu escáner coincidan.",
+                        "Archivo No Registrado (PC No Coincide)",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                }
+                else if (resultado == "NO_USER")
+                {
+                    MessageBox.Show(
+                        $"Se detectó el archivo '{archivo}', pero no hay ningún usuario con sesión activa en esta aplicación.",
+                        "Sin Sesión Activa",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                }
+                else if (resultado == "ERROR")
+                {
+                    MessageBox.Show(
+                        $"Se detectó el archivo '{archivo}', pero ocurrió un error al intentar guardar el registro de auditoría en la red.",
+                        "Error al Registrar Auditoría",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                }
             });
-
-            // Registrar en la auditoría asíncronamente
-            ModuloAuditoria.RegistrarAccion(notariaActual, e.Name ?? "Desconocido", e.FullPath, "PDF Escaneado en " + e.FullPath);
         }
 
         private void BtnCerrarSesion_Click(object? sender, EventArgs e)
