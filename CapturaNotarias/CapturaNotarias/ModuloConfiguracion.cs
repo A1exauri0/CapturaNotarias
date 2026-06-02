@@ -6,9 +6,11 @@ namespace CapturaNotarias
 {
     public class ConfiguracionApp
     {
-        public string? RutaServidorAuditoria { get; set; }
+        public string? RutaServidorAuditoria { get; set; } = @"\\192.168.1.10\NOTARIAS";
         public string? UltimaRutaVigilada { get; set; }
         public string? NombrePC { get; set; }
+        public string? LugarTrabajo { get; set; }
+        public string? UrlApi { get; set; } = "http://localhost:8000/api/digitalizacion/registrar";
     }
 
     public static class ModuloConfiguracion
@@ -20,6 +22,8 @@ namespace CapturaNotarias
         // El servidor donde caen los logs de auditoría general
         public static string RutaServidorAuditoria = @"\\192.168.1.10\NOTARIAS"; 
         public static string NombrePC = "";
+        public static string LugarTrabajo = "";
+        public static string UrlApi = "http://localhost:8000/api/digitalizacion/registrar";
 
         // Obtener ruta local donde guardaremos las preferencias del usuario (Servidor y ultima ruta)
         private static string ObtenerArchivoConfig()
@@ -48,11 +52,33 @@ namespace CapturaNotarias
                     if (!string.IsNullOrEmpty(config.NombrePC))
                         NombrePC = config.NombrePC;
 
+                    if (!string.IsNullOrEmpty(config.LugarTrabajo))
+                        LugarTrabajo = config.LugarTrabajo;
+
+                    if (!string.IsNullOrEmpty(config.UrlApi))
+                    {
+                        if (config.UrlApi.EndsWith("/api/registrar"))
+                        {
+                            config.UrlApi = config.UrlApi.Substring(0, config.UrlApi.Length - "/api/registrar".Length) + "/api/digitalizacion/registrar";
+                            try { File.WriteAllText(archivo, JsonConvert.SerializeObject(config, Formatting.Indented)); } catch {}
+                        }
+                        else if (config.UrlApi.EndsWith("/api/notarias/registrar"))
+                        {
+                            config.UrlApi = config.UrlApi.Substring(0, config.UrlApi.Length - "/api/notarias/registrar".Length) + "/api/digitalizacion/registrar";
+                            try { File.WriteAllText(archivo, JsonConvert.SerializeObject(config, Formatting.Indented)); } catch {}
+                        }
+                        UrlApi = config.UrlApi;
+                    }
+
                     return config;
                 }
                 catch { }
             }
-            return new ConfiguracionApp();
+
+            // Si el archivo no existe, creamos la configuración por defecto y la guardamos
+            var configDefecto = new ConfiguracionApp();
+            GuardarConfiguracion(configDefecto);
+            return configDefecto;
         }
 
         public static void GuardarConfiguracion(ConfiguracionApp config)
@@ -64,6 +90,12 @@ namespace CapturaNotarias
                 
                 if (!string.IsNullOrEmpty(config.NombrePC))
                     NombrePC = config.NombrePC;
+
+                if (!string.IsNullOrEmpty(config.LugarTrabajo))
+                    LugarTrabajo = config.LugarTrabajo;
+
+                if (!string.IsNullOrEmpty(config.UrlApi))
+                    UrlApi = config.UrlApi;
 
                 string json = JsonConvert.SerializeObject(config, Formatting.Indented);
                 File.WriteAllText(ObtenerArchivoConfig(), json);

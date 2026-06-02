@@ -43,6 +43,7 @@ namespace CapturaNotarias
             ToolStripMenuItem itemExcel = new ToolStripMenuItem("📊 Descargar Reporte Excel...");
             ToolStripMenuItem itemEnviarArchivos = new ToolStripMenuItem("📤 Enviar Auditorías a Servidor Central...");
             ToolStripMenuItem itemDiagnostico = new ToolStripMenuItem("🔍 Diagnóstico de Conexión de PCs...");
+            ToolStripMenuItem itemLugarTrabajo = new ToolStripMenuItem("📍 Cambiar Lugar de Trabajo...");
             
             itemConfigServidor.Click += BtnConfig_Click;
             itemAdminUsuarios.Click += BtnUsuarios_Click;
@@ -50,6 +51,7 @@ namespace CapturaNotarias
             itemExcel.Click += ItemExcel_Click;
             itemEnviarArchivos.Click += ItemEnviarArchivos_Click;
             itemDiagnostico.Click += ItemDiagnostico_Click;
+            itemLugarTrabajo.Click += ItemLugarTrabajo_Click;
             
             menuConfig.Items.Add(itemConfigServidor);
             menuConfig.Items.Add(itemAdminUsuarios);
@@ -57,6 +59,7 @@ namespace CapturaNotarias
             menuConfig.Items.Add(itemExcel);
             menuConfig.Items.Add(itemEnviarArchivos);
             menuConfig.Items.Add(itemDiagnostico);
+            menuConfig.Items.Add(itemLugarTrabajo);
 
             btnConfig.Click += (s, e) => {
                 menuConfig.Show(btnConfig, new Point(0, btnConfig.Height));
@@ -294,6 +297,14 @@ namespace CapturaNotarias
         private void ItemDiagnostico_Click(object? sender, EventArgs e)
         {
             using (FormDiagnostico frm = new FormDiagnostico())
+            {
+                frm.ShowDialog();
+            }
+        }
+
+        private void ItemLugarTrabajo_Click(object? sender, EventArgs e)
+        {
+            using (FormLugarTrabajo frm = new FormLugarTrabajo())
             {
                 frm.ShowDialog();
             }
