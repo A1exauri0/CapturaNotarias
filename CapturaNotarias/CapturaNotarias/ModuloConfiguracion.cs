@@ -10,7 +10,7 @@ namespace CapturaNotarias
         public string? UltimaRutaVigilada { get; set; }
         public string? NombrePC { get; set; }
         public string? LugarTrabajo { get; set; }
-        public string? UrlApi { get; set; } = "http://localhost:8000/api/digitalizacion/registrar";
+        public string? UrlApi { get; set; } = "https://app.astronmx.cloud/api/digitalizacion/registrar";
         public bool ActivarEnvioAuditoria { get; set; } = false;
     }
 
@@ -24,7 +24,7 @@ namespace CapturaNotarias
         public static string RutaServidorAuditoria = @"\\192.168.1.10\NOTARIAS"; 
         public static string NombrePC = "";
         public static string LugarTrabajo = "";
-        public static string UrlApi = "http://localhost:8000/api/digitalizacion/registrar";
+        public static string UrlApi = "https://app.astronmx.cloud/api/digitalizacion/registrar";
         public static bool ActivarEnvioAuditoria = false;
 
         // Obtener ruta local donde guardaremos las preferencias del usuario (Servidor y ultima ruta)
@@ -59,7 +59,12 @@ namespace CapturaNotarias
 
                     if (!string.IsNullOrEmpty(config.UrlApi))
                     {
-                        if (config.UrlApi.EndsWith("/api/registrar"))
+                        if (config.UrlApi.Contains("localhost:8000"))
+                        {
+                            config.UrlApi = "https://app.astronmx.cloud/api/digitalizacion/registrar";
+                            try { File.WriteAllText(archivo, JsonConvert.SerializeObject(config, Formatting.Indented)); } catch {}
+                        }
+                        else if (config.UrlApi.EndsWith("/api/registrar"))
                         {
                             config.UrlApi = config.UrlApi.Substring(0, config.UrlApi.Length - "/api/registrar".Length) + "/api/digitalizacion/registrar";
                             try { File.WriteAllText(archivo, JsonConvert.SerializeObject(config, Formatting.Indented)); } catch {}

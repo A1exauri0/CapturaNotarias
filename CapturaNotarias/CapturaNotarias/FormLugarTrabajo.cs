@@ -40,8 +40,10 @@ namespace CapturaNotarias
                 Font = fontGeneral,
                 DropDownStyle = ComboBoxStyle.DropDownList
             };
-            cmbLugarTrabajo.Items.Add("5 de mayo");
+            cmbLugarTrabajo.Items.Add("5 de mayo - 1");
+            cmbLugarTrabajo.Items.Add("5 de mayo - 2");
             cmbLugarTrabajo.Items.Add("IREC");
+            cmbLugarTrabajo.Items.Add("RPP");
             
             // Cargar valor actual si existe
             ConfiguracionApp config = ModuloConfiguracion.CargarConfiguracion();

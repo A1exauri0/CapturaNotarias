@@ -73,16 +73,23 @@ namespace CapturaNotarias
         {
             if (string.IsNullOrEmpty(ruta) || !Directory.Exists(ruta)) return;
 
-            // Extraer posible nombre de notaria de la ruta (Ej. \\192.168.1.10\NOTARIAS\NOTARIA 71\...)
-            string[] partes = ruta.Split(Path.DirectorySeparatorChar);
+            // Extraer posible nombre de notaria de la ruta y conservar subcarpetas (ej. NOTARIA 76\VOLUMEN 26)
+            string[] partes = ruta.Split(new char[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
             if (partes.Length >= 2)
             {
-                // Un intento básico de extraer "NOTARIA X"
-                foreach (var p in partes)
+                for (int i = 0; i < partes.Length; i++)
                 {
-                    if (p.ToUpper().Contains("NOTARIA"))
+                    string p = partes[i];
+                    string pUpper = p.ToUpper();
+                    if (pUpper.Contains("NOTARIA") && pUpper != "NOTARIAS")
                     {
-                        notariaActual = p;
+                        // Obtener esta carpeta y todas las subcarpetas subsecuentes
+                        var subpartes = new System.Collections.Generic.List<string>();
+                        for (int j = i; j < partes.Length; j++)
+                        {
+                            subpartes.Add(partes[j]);
+                        }
+                        notariaActual = string.Join(Path.DirectorySeparatorChar.ToString(), subpartes);
                         break;
                     }
                 }
@@ -99,10 +106,17 @@ namespace CapturaNotarias
             }
 
             watcher = new FileSystemWatcher(ruta);
+            watcher.InternalBufferSize = 65536; // Aumentar buffer a 64KB para evitar pérdida de eventos
             watcher.NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite;
             watcher.Filter = "*.pdf";
             watcher.Created += Watcher_Created;
+            watcher.Renamed += Watcher_Renamed;
             watcher.EnableRaisingEvents = true;
+        }
+
+        private void Watcher_Renamed(object sender, RenamedEventArgs e)
+        {
+            Watcher_Created(sender, e);
         }
 
         private void Watcher_Created(object sender, FileSystemEventArgs e)

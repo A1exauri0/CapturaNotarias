@@ -14,9 +14,13 @@ namespace CapturaNotarias
         private Button btnLogin;
         private Button btnConfig;
         private ContextMenuStrip menuConfig;
+        private Label lblAdvertencia = null!;
 
         public FormLogin()
         {
+            // Cargar configuración al iniciar para conocer el estado de ActivarEnvioAuditoria
+            ModuloConfiguracion.CargarConfiguracion();
+
             this.Text = "Captura Notarias";
             this.Size = new Size(480, 340);
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -40,11 +44,11 @@ namespace CapturaNotarias
 
             // Configurar el menú desplegable (ContextMenuStrip) en el botón de engranaje
             menuConfig = new ContextMenuStrip();
-            ToolStripMenuItem itemConfigServidor = new ToolStripMenuItem("⚙ Configurar Servidor...");
+            ToolStripMenuItem itemConfigServidor = new ToolStripMenuItem("⚙ Configuración...");
             ToolStripMenuItem itemAdminUsuarios = new ToolStripMenuItem("👥 Administrar Usuarios...");
             ToolStripMenuItem itemAuditoria = new ToolStripMenuItem("📊 Ver Productividad y Auditoría...");
             ToolStripMenuItem itemExcel = new ToolStripMenuItem("📊 Descargar Reporte Excel...");
-            ToolStripMenuItem itemEnviarArchivos = new ToolStripMenuItem("📤 Enviar Auditorías a Servidor Central...");
+            ToolStripMenuItem itemEnviarArchivos = new ToolStripMenuItem("📤 Enviar Auditorías  y Archivos a Servidor Central...");
             ToolStripMenuItem itemDiagnostico = new ToolStripMenuItem("🔍 Diagnóstico de Conexión de PCs...");
             ToolStripMenuItem itemLugarTrabajo = new ToolStripMenuItem("📍 Cambiar Lugar de Trabajo...");
             
@@ -70,13 +74,14 @@ namespace CapturaNotarias
             btnLogin.Click += BtnLogin_Click;
 
             // Etiqueta de advertencia de cierre
-            Label lblAdvertencia = new Label() 
+            lblAdvertencia = new Label() 
             { 
                 Text = "⚠️ Si cierra la aplicación, no se enviarán datos al servidor.", 
                 AutoSize = true, 
                 Location = new Point(30, 260), 
                 Font = new Font("Arial", 9.5F, FontStyle.Italic), 
-                ForeColor = Color.Firebrick 
+                ForeColor = Color.Firebrick,
+                Visible = ModuloConfiguracion.ActivarEnvioAuditoria
             };
 
             this.Controls.Add(lblTitle);
@@ -91,15 +96,33 @@ namespace CapturaNotarias
             this.AcceptButton = btnLogin;
         }
 
+        private bool ExisteDirectorioConTimeout(string ruta, int timeoutMs)
+        {
+            try
+            {
+                var tarea = System.Threading.Tasks.Task.Run(() => Directory.Exists(ruta));
+                if (tarea.Wait(timeoutMs))
+                {
+                    return tarea.Result;
+                }
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private void InicializarUsuariosJson()
         {
             try
             {
                 if (string.IsNullOrEmpty(ModuloConfiguracion.RutaServidorAuditoria)) return;
 
-                if (!Directory.Exists(ModuloConfiguracion.RutaServidorAuditoria))
+                // Evitar congelamiento de la interfaz si la ruta de red no está accesible
+                if (!ExisteDirectorioConTimeout(ModuloConfiguracion.RutaServidorAuditoria, 1500))
                 {
-                    Directory.CreateDirectory(ModuloConfiguracion.RutaServidorAuditoria);
+                    return;
                 }
 
                 string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
@@ -182,6 +205,9 @@ namespace CapturaNotarias
                     conf.NombrePC = pcNombreValido;
                 }
                 ModuloConfiguracion.GuardarConfiguracion(conf);
+                
+                // Actualizar visibilidad de la advertencia
+                lblAdvertencia.Visible = ModuloConfiguracion.ActivarEnvioAuditoria;
                 
                 // Intentar autogenerar el archivo usuarios.json al guardar la ruta
                 InicializarUsuariosJson();
@@ -435,8 +461,8 @@ namespace CapturaNotarias
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            // Mostrar advertencia si el usuario está cerrando la aplicación manualmente
-            if (e.CloseReason == CloseReason.UserClosing)
+            // Mostrar advertencia si el usuario está cerrando la aplicación manualmente y el envío automático de auditorías está activo
+            if (e.CloseReason == CloseReason.UserClosing && ModuloConfiguracion.ActivarEnvioAuditoria)
             {
                 var resultado = MessageBox.Show(
                     "Si cierra la aplicación, se detendrá el monitoreo y ya no se enviarán datos de auditoría al servidor.\n\n¿Está seguro de que desea salir?",

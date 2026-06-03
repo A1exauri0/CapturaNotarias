@@ -22,6 +22,7 @@ namespace CapturaNotarias
         public int Paginas { get; set; } = 1; // Para guardar el total de imágenes (páginas) del PDF
         public string? LugarTrabajo { get; set; }
         public bool? Enviado { get; set; }
+        public string? RutaLocal { get; set; }
     }
 
     public class ArchivoAuditoriaJson
@@ -131,6 +132,19 @@ namespace CapturaNotarias
                     auditoria = new ArchivoAuditoriaJson();
                 }
 
+                // Evitar registrar duplicados del mismo archivo en el mismo día para esta PC
+                string hoy = DateTime.Now.ToString("yyyy-MM-dd");
+                bool yaExiste = auditoria.Registros.Any(r => 
+                    string.Equals(r.ArchivoOriginal, archivo, StringComparison.OrdinalIgnoreCase) && 
+                    string.Equals(r.PC, pcNombre, StringComparison.OrdinalIgnoreCase) && 
+                    r.Accion == "Capturado" &&
+                    r.FechaHora != null && r.FechaHora.StartsWith(hoy));
+
+                if (yaExiste)
+                {
+                    return "DUPLICATE";
+                }
+
                 // Inyectamos el nuevo registro
                 auditoria.Registros.Add(new RegistroAuditoria
                 {
@@ -146,7 +160,8 @@ namespace CapturaNotarias
                     Detalles = detalles,
                     Paginas = paginas,
                     LugarTrabajo = ModuloConfiguracion.LugarTrabajo,
-                    Enviado = false
+                    Enviado = false,
+                    RutaLocal = rutaCompleta
                 });
 
                 string jsonFinal = JsonConvert.SerializeObject(auditoria, Formatting.Indented);
@@ -175,8 +190,43 @@ namespace CapturaNotarias
             }
         }
 
+        private static bool ExisteDirectorioConTimeout(string ruta, int timeoutMs = 1500)
+        {
+            try
+            {
+                var tarea = System.Threading.Tasks.Task.Run(() => Directory.Exists(ruta));
+                if (tarea.Wait(timeoutMs))
+                {
+                    return tarea.Result;
+                }
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public static string ObtenerRutaJsonLocal()
         {
+            try
+            {
+                if (!string.IsNullOrEmpty(ModuloConfiguracion.RutaServidorAuditoria) && !string.IsNullOrEmpty(ModuloConfiguracion.NombrePC))
+                {
+                    if (ExisteDirectorioConTimeout(ModuloConfiguracion.RutaServidorAuditoria, 1500))
+                    {
+                        string rutaMonitoreo = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "MonitoreoCaptura", ModuloConfiguracion.NombrePC);
+                        if (!Directory.Exists(rutaMonitoreo))
+                        {
+                            Directory.CreateDirectory(rutaMonitoreo);
+                        }
+                        return Path.Combine(rutaMonitoreo, "auditoria.json");
+                    }
+                }
+            }
+            catch { }
+
+            // Fallback a AppData local
             string carpeta = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "CapturaNotarias");
             if (!Directory.Exists(carpeta))
             {
@@ -190,23 +240,66 @@ namespace CapturaNotarias
             var todos = new List<RegistroAuditoria>();
             try
             {
-                string rutaJson = ObtenerRutaJsonLocal();
-                if (File.Exists(rutaJson))
+                bool cargadoDesdeServidor = false;
+
+                // Si la ruta del servidor está configurada, intentamos cargar los registros de todas las PCs
+                if (!string.IsNullOrEmpty(ModuloConfiguracion.RutaServidorAuditoria))
                 {
-                    string json = "";
-                    using (FileStream fs = new FileStream(rutaJson, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                    using (StreamReader sr = new StreamReader(fs))
+                    string rutaMonitoreoRaiz = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "MonitoreoCaptura");
+                    if (ExisteDirectorioConTimeout(rutaMonitoreoRaiz, 1500))
                     {
-                        json = sr.ReadToEnd();
+                        foreach (string carpetaPC in Directory.GetDirectories(rutaMonitoreoRaiz))
+                        {
+                            string nombrePC = Path.GetFileName(carpetaPC);
+                            if (nombrePC.StartsWith("PC-", StringComparison.OrdinalIgnoreCase))
+                            {
+                                string rutaJson = Path.Combine(carpetaPC, "auditoria.json");
+                                if (File.Exists(rutaJson))
+                                {
+                                    try
+                                    {
+                                        string json = "";
+                                        using (FileStream fs = new FileStream(rutaJson, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                                        using (StreamReader sr = new StreamReader(fs))
+                                        {
+                                            json = sr.ReadToEnd();
+                                        }
+                                        var obj = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(json);
+                                        if (obj != null && obj.Registros != null)
+                                        {
+                                            todos.AddRange(obj.Registros);
+                                            cargadoDesdeServidor = true;
+                                        }
+                                    }
+                                    catch { }
+                                }
+                            }
+                        }
                     }
-                    var obj = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(json);
-                    if (obj != null && obj.Registros != null)
+                }
+
+                // Fallback: Si no se pudo conectar al servidor o no hay registros, cargamos el local
+                if (!cargadoDesdeServidor)
+                {
+                    string rutaJson = ObtenerRutaJsonLocal();
+                    if (File.Exists(rutaJson))
                     {
-                        todos.AddRange(obj.Registros);
+                        string json = "";
+                        using (FileStream fs = new FileStream(rutaJson, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                        using (StreamReader sr = new StreamReader(fs))
+                        {
+                            json = sr.ReadToEnd();
+                        }
+                        var obj = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(json);
+                        if (obj != null && obj.Registros != null)
+                        {
+                            todos.AddRange(obj.Registros);
+                        }
                     }
                 }
             }
             catch { }
+
             // Ordenar por fecha de forma descendente (el más nuevo arriba)
             return todos.OrderBy(r => r.FechaHora).ToList();
         }
@@ -562,27 +655,147 @@ namespace CapturaNotarias
                     return;
                 }
 
+                // Cargar config para fallback de ruta vigilada
+                var config = ModuloConfiguracion.CargarConfiguracion();
+                string ultimaRuta = config?.UltimaRutaVigilada ?? "";
+
                 Form? formularioProgreso = null;
+                Label? etiquetaProgreso = null;
+                ProgressBar? barraArchivos = null;
+                ProgressBar? barraAuditoria = null;
+
                 if (!silencioso)
                 {
                     formularioProgreso = new Form()
                     {
                         ClientSize = new Size(420, 100),
-                        Text = "Sincronización de Auditoría",
+                        Text = "Sincronización de Archivos y Auditoría",
                         FormBorderStyle = FormBorderStyle.FixedDialog,
                         StartPosition = FormStartPosition.CenterScreen,
                         ControlBox = false
                     };
-                    var etiqueta = new Label() { Left = 30, Top = 25, Width = 360, Height = 25, Text = "Enviando registros al servidor central..." };
-                    var barra = new ProgressBar() { Left = 30, Top = 55, Width = 360, Height = 23, Style = ProgressBarStyle.Marquee };
-                    formularioProgreso.Controls.Add(etiqueta);
-                    formularioProgreso.Controls.Add(barra);
+                    etiquetaProgreso = new Label() { Left = 30, Top = 20, Width = 360, Height = 25, Text = "Iniciando transferencia..." };
+                    
+                    // Barra para copiar archivos (por bloques según avance real)
+                    barraArchivos = new ProgressBar() 
+                    { 
+                        Left = 30, 
+                        Top = 50, 
+                        Width = 360, 
+                        Height = 23, 
+                        Style = ProgressBarStyle.Continuous, 
+                        Minimum = 0, 
+                        Maximum = logsNoEnviados.Count, 
+                        Value = 0,
+                        Visible = true 
+                    };
+                    
+                    // Barra para enviar auditoría (Marquee/Indeterminada)
+                    barraAuditoria = new ProgressBar() 
+                    { 
+                        Left = 30, 
+                        Top = 50, 
+                        Width = 360, 
+                        Height = 23, 
+                        Style = ProgressBarStyle.Marquee, 
+                        Visible = false 
+                    };
+
+                    formularioProgreso.Controls.Add(etiquetaProgreso);
+                    formularioProgreso.Controls.Add(barraArchivos);
+                    formularioProgreso.Controls.Add(barraAuditoria);
                     formularioProgreso.Show();
                     formularioProgreso.Refresh();
                 }
 
-                // Intentar enviar los logs no enviados
-                bool exito = EnviarLogsAlServidorCentralHttp(logsNoEnviados);
+                // Intentar copiar cada archivo y preparar la lista de logs a enviar
+                var logsAEnviar = new System.Collections.Generic.List<RegistroAuditoria>();
+                
+                int indice = 0;
+                foreach (var log in logsNoEnviados)
+                {
+                    indice++;
+                    if (!silencioso && etiquetaProgreso != null && formularioProgreso != null && barraArchivos != null)
+                    {
+                        etiquetaProgreso.Text = string.Format("Copiando archivo {0} de {1}...", indice, logsNoEnviados.Count);
+                        barraArchivos.Value = indice;
+                        formularioProgreso.Refresh();
+                        Application.DoEvents();
+                    }
+
+                    string rutaLocal = log.RutaLocal ?? "";
+                    
+                    // Fallback para registros antiguos
+                    if (string.IsNullOrEmpty(rutaLocal) && !string.IsNullOrEmpty(ultimaRuta))
+                    {
+                        rutaLocal = Path.Combine(ultimaRuta, log.ArchivoOriginal ?? "");
+                    }
+                    
+                    if (!string.IsNullOrEmpty(rutaLocal) && File.Exists(rutaLocal))
+                    {
+                        try
+                        {
+                            string destinoCarpeta = Path.Combine(@"\\172.40.5.84\ssdirec\NOTARIAS", log.Notaria ?? "General");
+                            if (!Directory.Exists(destinoCarpeta))
+                            {
+                                Directory.CreateDirectory(destinoCarpeta);
+                            }
+                            
+                            string destinoArchivo = Path.Combine(destinoCarpeta, log.ArchivoOriginal ?? "");
+                            
+                            // Copiar el archivo al servidor central ssdirec
+                            File.Copy(rutaLocal, destinoArchivo, true);
+                            
+                            // Si se copió con éxito, intentar borrarlo localmente
+                            try
+                            {
+                                File.Delete(rutaLocal);
+                            }
+                            catch (Exception exDel)
+                            {
+                                System.Diagnostics.Debug.WriteLine("No se pudo eliminar el archivo local: " + exDel.Message);
+                            }
+                            
+                            logsAEnviar.Add(log);
+                        }
+                        catch (Exception exCopy)
+                        {
+                            System.Diagnostics.Debug.WriteLine("Error al copiar archivo a ssdirec: " + exCopy.Message);
+                            // No agregamos a logsAEnviar para reintentar la copia en la siguiente sincronización
+                        }
+                    }
+                    else
+                    {
+                        // Si el archivo ya no existe localmente (por ejemplo, borrado manual), 
+                        // agregamos el log para que no se quede atascado.
+                        logsAEnviar.Add(log);
+                    }
+                }
+
+                if (logsAEnviar.Count == 0)
+                {
+                    if (!silencioso && formularioProgreso != null)
+                    {
+                        formularioProgreso.Close();
+                    }
+                    if (!silencioso)
+                    {
+                        MessageBox.Show("No se pudieron copiar los archivos al servidor central ssdirec. Verifique su conexión de red.", "Error de Sincronización", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+                    return;
+                }
+
+                if (!silencioso && etiquetaProgreso != null && formularioProgreso != null && barraArchivos != null && barraAuditoria != null)
+                {
+                    barraArchivos.Visible = false;
+                    barraAuditoria.Visible = true;
+                    etiquetaProgreso.Text = "Enviando registros al servidor central...";
+                    formularioProgreso.Refresh();
+                    Application.DoEvents();
+                }
+
+                // Intentar enviar los logs procesados
+                bool exito = EnviarLogsAlServidorCentralHttp(logsAEnviar);
 
                 if (!silencioso && formularioProgreso != null)
                 {
@@ -592,7 +805,7 @@ namespace CapturaNotarias
                 if (exito)
                 {
                     // Marcar como enviados
-                    foreach (var reg in logsNoEnviados)
+                    foreach (var reg in logsAEnviar)
                     {
                         reg.Enviado = true;
                     }
@@ -607,7 +820,7 @@ namespace CapturaNotarias
 
                     if (!silencioso)
                     {
-                        MessageBox.Show(string.Format("Sincronización completada con éxito. Se enviaron {0} registros al servidor.", logsNoEnviados.Count), "Resultado de Sincronización", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        MessageBox.Show(string.Format("Sincronización completada con éxito. Se enviaron {0} registros y sus archivos correspondientes.", logsAEnviar.Count), "Resultado de Sincronización", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     }
                 }
                 else
