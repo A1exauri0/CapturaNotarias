@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace CapturaNotarias
@@ -12,6 +13,7 @@ namespace CapturaNotarias
         private Label lblContador = null!;
         private Button btnCambiarRuta = null!;
         private Button btnCerrarSesion = null!;
+        private Button btnReconteo = null!;
         private FileSystemWatcher? watcher;
         private int contadorSesion = 0;
         private ConfiguracionApp configLocal;
@@ -22,14 +24,21 @@ namespace CapturaNotarias
         {
             configLocal = ModuloConfiguracion.CargarConfiguracion();
             InitializeComponent();
+            CargarContadorDelDia();
             ConfigurarWatcher(configLocal.UltimaRutaVigilada);
             IniciarTemporizadorSincronizacion();
+        }
+
+        private void CargarContadorDelDia()
+        {
+            contadorSesion = ModuloAuditoria.ObtenerContadorDelDia(ModuloConfiguracion.UsuarioActual);
+            lblContador.Text = "Capturados hoy: " + contadorSesion;
         }
 
         private void InitializeComponent()
         {
             this.Text = "Captura de PDFs";
-            this.Size = new Size(420, 240);
+            this.Size = new Size(420, 285);
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MinimizeBox = true;
             this.MaximizeBox = false;
@@ -46,15 +55,18 @@ namespace CapturaNotarias
 
             btnCambiarRuta = new Button() { Text = "📂 Elegir Carpeta", Location = new Point(20, 145), Size = new Size(170, 38), FlatStyle = FlatStyle.Flat, Font = new Font("Arial", 10.5F) };
             btnCerrarSesion = new Button() { Text = "Cerrar Sesión", Location = new Point(210, 145), Size = new Size(170, 38), FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Color.Firebrick, Font = new Font("Arial", 10.5F) };
+            btnReconteo = new Button() { Text = "🔄 Reconteo de Páginas", Location = new Point(20, 195), Size = new Size(360, 38), FlatStyle = FlatStyle.Flat, BackColor = Color.SteelBlue, ForeColor = Color.White, Font = new Font("Arial", 10.5F) };
 
             btnCambiarRuta.Click += BtnCambiarRuta_Click;
             btnCerrarSesion.Click += BtnCerrarSesion_Click;
+            btnReconteo.Click += BtnReconteo_Click;
 
             this.Controls.Add(lblUsuario);
             this.Controls.Add(lblRuta);
             this.Controls.Add(lblContador);
             this.Controls.Add(btnCambiarRuta);
             this.Controls.Add(btnCerrarSesion);
+            this.Controls.Add(btnReconteo);
         }
 
         private void BtnCambiarRuta_Click(object? sender, EventArgs e)
@@ -172,6 +184,44 @@ namespace CapturaNotarias
             // Volver al login
             this.DialogResult = DialogResult.OK;
             this.Close();
+        }
+
+        private void BtnReconteo_Click(object? sender, EventArgs e)
+        {
+            btnReconteo.Enabled = false;
+            btnReconteo.Text = "\u23f3 Recontando...";
+            this.Refresh();
+
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                var resultado = ModuloAuditoria.RecontarPaginasDelDia();
+                
+                this.Invoke((MethodInvoker)delegate
+                {
+                    btnReconteo.Enabled = true;
+                    btnReconteo.Text = "\ud83d\udd04 Reconteo de P\u00e1ginas";
+
+                    // Actualizar el contador visual con el total real de registros del día
+                    CargarContadorDelDia();
+
+                    if (resultado.actualizados > 0)
+                    {
+                        MessageBox.Show(
+                            string.Format("Reconteo completado.\n\n\u2022 Registros corregidos: {0}\n\u2022 Total de p\u00e1ginas del d\u00eda: {1}", resultado.actualizados, resultado.totalPaginas),
+                            "Reconteo Exitoso",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information);
+                    }
+                    else
+                    {
+                        MessageBox.Show(
+                            string.Format("No se encontraron diferencias en el conteo de p\u00e1ginas.\n\nTotal de p\u00e1ginas del d\u00eda: {0}", resultado.totalPaginas),
+                            "Reconteo Completado",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information);
+                    }
+                });
+            });
         }
 
         private void IniciarTemporizadorSincronizacion()

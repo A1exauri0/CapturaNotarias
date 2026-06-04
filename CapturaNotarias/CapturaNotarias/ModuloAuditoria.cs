@@ -23,6 +23,9 @@ namespace CapturaNotarias
         public string? LugarTrabajo { get; set; }
         public bool? Enviado { get; set; }
         public string? RutaLocal { get; set; }
+
+        [JsonIgnore]
+        public string? RutaJsonOrigen { get; set; }
     }
 
     public class ArchivoAuditoriaJson
@@ -32,6 +35,9 @@ namespace CapturaNotarias
 
     public static class ModuloAuditoria
     {
+        private static readonly object _lockJson = new object();
+        private static bool _migracionRealizada = false;
+
         public static int ObtenerPaginasPdf(string rutaCompleta)
         {
             if (string.IsNullOrEmpty(rutaCompleta) || !File.Exists(rutaCompleta))
@@ -103,90 +109,212 @@ namespace CapturaNotarias
                 // Contar páginas del PDF de forma segura
                 int paginas = ObtenerPaginasPdf(rutaCompleta);
 
-                // Carpeta local para guardar las auditorías de captura
-                string rutaJson = ObtenerRutaJsonLocal();
-                ArchivoAuditoriaJson auditoria;
-
-                if (File.Exists(rutaJson))
+                lock (_lockJson)
                 {
+                    // Carpeta local para guardar las auditorías de captura (siempre AppData local)
+                    string rutaJson = ObtenerRutaJsonLocal();
+                    ArchivoAuditoriaJson auditoria;
+
+                    if (File.Exists(rutaJson))
+                    {
+                        try
+                        {
+                            // Leemos con FileShare.ReadWrite para evitar colisiones
+                            string json = "";
+                            using (FileStream fs = new FileStream(rutaJson, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                            using (StreamReader sr = new StreamReader(fs))
+                            {
+                                json = sr.ReadToEnd();
+                            }
+
+                            auditoria = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(json) ?? new ArchivoAuditoriaJson();
+                        }
+                        catch
+                        {
+                            // Si está corrupto, empezamos uno nuevo para no detener la captura
+                            auditoria = new ArchivoAuditoriaJson();
+                        }
+                    }
+                    else
+                    {
+                        auditoria = new ArchivoAuditoriaJson();
+                    }
+
+                    // Evitar registrar duplicados del mismo archivo en el mismo día para esta PC
+                    string hoy = DateTime.Now.ToString("yyyy-MM-dd");
+                    bool yaExiste = auditoria.Registros.Any(r => 
+                        string.Equals(r.ArchivoOriginal, archivo, StringComparison.OrdinalIgnoreCase) && 
+                        string.Equals(r.PC, pcNombre, StringComparison.OrdinalIgnoreCase) && 
+                        r.Accion == "Capturado" &&
+                        r.FechaHora != null && r.FechaHora.StartsWith(hoy));
+
+                    if (yaExiste)
+                    {
+                        return "DUPLICATE";
+                    }
+
+                    // Inyectamos el nuevo registro
+                    var nuevoRegistro = new RegistroAuditoria
+                    {
+                        FechaHora = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        Usuario = ModuloConfiguracion.UsuarioActual,
+                        NombreCompleto = ModuloConfiguracion.NombreCompletoActual,
+                        Turno = ModuloConfiguracion.TurnoActual,
+                        PC = pcNombre,
+                        IP = localIp,
+                        Notaria = notaria,
+                        Accion = "Capturado",
+                        ArchivoOriginal = archivo,
+                        Detalles = detalles,
+                        Paginas = paginas,
+                        LugarTrabajo = ModuloConfiguracion.LugarTrabajo,
+                        Enviado = false,
+                        RutaLocal = rutaCompleta
+                    };
+                    auditoria.Registros.Add(nuevoRegistro);
+
+                    string jsonFinal = JsonConvert.SerializeObject(auditoria, Formatting.Indented);
+                    
+                    // Intentamos guardar con reintentos silenciosos
+                    bool guardado = false;
+                    for (int i = 0; i < 3; i++)
+                    {
+                        try
+                        {
+                            File.WriteAllText(rutaJson, jsonFinal);
+                            guardado = true;
+                            break;
+                        }
+                        catch
+                        {
+                            System.Threading.Thread.Sleep(500);
+                        }
+                    }
+
+                    // Replicar al servidor de red (mejor esfuerzo, sin afectar resultado)
+                    if (guardado)
+                    {
+                        try { ReplicarRegistroAlServidor(nuevoRegistro); } catch { }
+                    }
+
+                    return guardado ? "OK" : "ERROR";
+                }
+            }
+            catch
+            {
+                return "ERROR";
+            }
+        }
+
+        /// <summary>
+        /// Recorre los registros del día del usuario actual, vuelve a contar las páginas
+        /// de cada PDF desde el archivo físico y actualiza el JSON local y del servidor.
+        /// Retorna (registrosActualizados, totalPaginasNuevo).
+        /// </summary>
+        public static (int actualizados, int totalPaginas) RecontarPaginasDelDia()
+        {
+            int actualizados = 0;
+            int totalPaginas = 0;
+
+            try
+            {
+                string pcNombre = string.IsNullOrEmpty(ModuloConfiguracion.NombrePC) ? Environment.MachineName : ModuloConfiguracion.NombrePC;
+                string hoy = DateTime.Now.ToString("yyyy-MM-dd");
+
+                lock (_lockJson)
+                {
+                    string rutaJson = ObtenerRutaJsonLocal();
+                    if (!File.Exists(rutaJson)) return (0, 0);
+
+                    ArchivoAuditoriaJson auditoria;
                     try
                     {
-                        // Leemos con FileShare.ReadWrite para evitar colisiones
                         string json = "";
                         using (FileStream fs = new FileStream(rutaJson, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
                         using (StreamReader sr = new StreamReader(fs))
                         {
                             json = sr.ReadToEnd();
                         }
-
                         auditoria = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(json) ?? new ArchivoAuditoriaJson();
                     }
                     catch
                     {
-                        // Si está corrupto, empezamos uno nuevo para no detener la captura
-                        auditoria = new ArchivoAuditoriaJson();
+                        return (0, 0);
                     }
-                }
-                else
-                {
-                    auditoria = new ArchivoAuditoriaJson();
-                }
 
-                // Evitar registrar duplicados del mismo archivo en el mismo día para esta PC
-                string hoy = DateTime.Now.ToString("yyyy-MM-dd");
-                bool yaExiste = auditoria.Registros.Any(r => 
-                    string.Equals(r.ArchivoOriginal, archivo, StringComparison.OrdinalIgnoreCase) && 
-                    string.Equals(r.PC, pcNombre, StringComparison.OrdinalIgnoreCase) && 
-                    r.Accion == "Capturado" &&
-                    r.FechaHora != null && r.FechaHora.StartsWith(hoy));
+                    // Filtrar registros del día, del usuario actual y de esta PC
+                    var registrosHoy = auditoria.Registros.Where(r =>
+                        r.FechaHora != null && r.FechaHora.StartsWith(hoy) &&
+                        string.Equals(r.PC, pcNombre, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(r.Usuario, ModuloConfiguracion.UsuarioActual, StringComparison.OrdinalIgnoreCase) &&
+                        r.Accion == "Capturado").ToList();
 
-                if (yaExiste)
-                {
-                    return "DUPLICATE";
-                }
-
-                // Inyectamos el nuevo registro
-                auditoria.Registros.Add(new RegistroAuditoria
-                {
-                    FechaHora = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                    Usuario = ModuloConfiguracion.UsuarioActual,
-                    NombreCompleto = ModuloConfiguracion.NombreCompletoActual,
-                    Turno = ModuloConfiguracion.TurnoActual,
-                    PC = pcNombre,
-                    IP = localIp,
-                    Notaria = notaria,
-                    Accion = "Capturado",
-                    ArchivoOriginal = archivo,
-                    Detalles = detalles,
-                    Paginas = paginas,
-                    LugarTrabajo = ModuloConfiguracion.LugarTrabajo,
-                    Enviado = false,
-                    RutaLocal = rutaCompleta
-                });
-
-                string jsonFinal = JsonConvert.SerializeObject(auditoria, Formatting.Indented);
-                
-                // Intentamos guardar con reintentos silenciosos
-                bool guardado = false;
-                for (int i = 0; i < 3; i++)
-                {
-                    try
+                    foreach (var reg in registrosHoy)
                     {
-                        File.WriteAllText(rutaJson, jsonFinal);
-                        guardado = true;
-                        break;
-                    }
-                    catch
-                    {
-                        System.Threading.Thread.Sleep(500);
-                    }
-                }
+                        string rutaArchivo = reg.RutaLocal ?? "";
 
-                return guardado ? "OK" : "ERROR";
+                        if (!string.IsNullOrEmpty(rutaArchivo) && File.Exists(rutaArchivo))
+                        {
+                            int paginasNuevas = ObtenerPaginasPdf(rutaArchivo);
+                            if (paginasNuevas != reg.Paginas)
+                            {
+                                reg.Paginas = paginasNuevas;
+                                actualizados++;
+                            }
+                        }
+                        totalPaginas += reg.Paginas;
+                    }
+
+                    if (actualizados > 0)
+                    {
+                        // Guardar JSON local actualizado
+                        try
+                        {
+                            string jsonFinal = JsonConvert.SerializeObject(auditoria, Formatting.Indented);
+                            File.WriteAllText(rutaJson, jsonFinal);
+                        }
+                        catch { }
+
+                        // Intentar actualizar también el servidor de red
+                        try
+                        {
+                            string? rutaServidor = ObtenerRutaJsonServidor();
+                            if (rutaServidor != null && File.Exists(rutaServidor))
+                            {
+                                string jsonServ = "";
+                                using (FileStream fs = new FileStream(rutaServidor, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                                using (StreamReader sr = new StreamReader(fs))
+                                {
+                                    jsonServ = sr.ReadToEnd();
+                                }
+                                var audServ = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(jsonServ);
+                                if (audServ != null)
+                                {
+                                    foreach (var regLocal in registrosHoy)
+                                    {
+                                        var regServ = audServ.Registros.FirstOrDefault(r =>
+                                            string.Equals(r.ArchivoOriginal, regLocal.ArchivoOriginal, StringComparison.OrdinalIgnoreCase) &&
+                                            string.Equals(r.PC, regLocal.PC, StringComparison.OrdinalIgnoreCase) &&
+                                            r.FechaHora == regLocal.FechaHora);
+                                        if (regServ != null)
+                                        {
+                                            regServ.Paginas = regLocal.Paginas;
+                                        }
+                                    }
+                                    string jsonServFinal = JsonConvert.SerializeObject(audServ, Formatting.Indented);
+                                    File.WriteAllText(rutaServidor, jsonServFinal);
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+
+                    return (actualizados, totalPaginas);
+                }
             }
             catch
             {
-                return "ERROR";
+                return (actualizados, totalPaginas);
             }
         }
 
@@ -209,6 +337,39 @@ namespace CapturaNotarias
 
         public static string ObtenerRutaJsonLocal()
         {
+            // Siempre usar AppData local como fuente de verdad para garantizar
+            // que nunca se pierdan registros por desconexión del servidor
+            string carpeta = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "CapturaNotarias");
+            if (!Directory.Exists(carpeta))
+            {
+                Directory.CreateDirectory(carpeta);
+            }
+            string rutaLocal = Path.Combine(carpeta, "auditoria_local.json");
+
+            // Migración única: si no existe archivo local pero sí hay datos en el servidor,
+            // copiarlos para no perder el historial de las versiones anteriores
+            if (!_migracionRealizada)
+            {
+                _migracionRealizada = true;
+                if (!File.Exists(rutaLocal))
+                {
+                    try
+                    {
+                        string? rutaServidor = ObtenerRutaJsonServidor();
+                        if (rutaServidor != null && File.Exists(rutaServidor))
+                        {
+                            File.Copy(rutaServidor, rutaLocal);
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            return rutaLocal;
+        }
+
+        public static string? ObtenerRutaJsonServidor()
+        {
             try
             {
                 if (!string.IsNullOrEmpty(ModuloConfiguracion.RutaServidorAuditoria) && !string.IsNullOrEmpty(ModuloConfiguracion.NombrePC))
@@ -225,14 +386,173 @@ namespace CapturaNotarias
                 }
             }
             catch { }
+            return null;
+        }
 
-            // Fallback a AppData local
-            string carpeta = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "CapturaNotarias");
-            if (!Directory.Exists(carpeta))
+        private static void ReplicarRegistroAlServidor(RegistroAuditoria registro)
+        {
+            try
             {
-                Directory.CreateDirectory(carpeta);
+                string? rutaServidor = ObtenerRutaJsonServidor();
+                if (rutaServidor == null) return;
+
+                ArchivoAuditoriaJson auditoriaServidor;
+                if (File.Exists(rutaServidor))
+                {
+                    string json = "";
+                    using (FileStream fs = new FileStream(rutaServidor, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    using (StreamReader sr = new StreamReader(fs))
+                    {
+                        json = sr.ReadToEnd();
+                    }
+                    auditoriaServidor = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(json) ?? new ArchivoAuditoriaJson();
+                }
+                else
+                {
+                    auditoriaServidor = new ArchivoAuditoriaJson();
+                }
+
+                // Verificar que no exista ya en el servidor para evitar duplicados
+                string hoy = registro.FechaHora?.Substring(0, 10) ?? DateTime.Now.ToString("yyyy-MM-dd");
+                bool yaExiste = auditoriaServidor.Registros.Any(r =>
+                    string.Equals(r.ArchivoOriginal, registro.ArchivoOriginal, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(r.PC, registro.PC, StringComparison.OrdinalIgnoreCase) &&
+                    r.Accion == "Capturado" &&
+                    r.FechaHora != null && r.FechaHora.StartsWith(hoy));
+
+                if (!yaExiste)
+                {
+                    auditoriaServidor.Registros.Add(registro);
+                    string jsonFinal = JsonConvert.SerializeObject(auditoriaServidor, Formatting.Indented);
+                    File.WriteAllText(rutaServidor, jsonFinal);
+                }
             }
-            return Path.Combine(carpeta, "auditoria_local.json");
+            catch { } // Mejor esfuerzo, ignorar fallos silenciosamente
+        }
+
+        public static int ObtenerContadorDelDia(string usuario)
+        {
+            try
+            {
+                string hoy = DateTime.Now.ToString("yyyy-MM-dd");
+                string pcNombre = string.IsNullOrEmpty(ModuloConfiguracion.NombrePC) ? Environment.MachineName : ModuloConfiguracion.NombrePC;
+                string rutaJson = ObtenerRutaJsonLocal();
+
+                lock (_lockJson)
+                {
+                    if (File.Exists(rutaJson))
+                    {
+                        string json = "";
+                        using (FileStream fs = new FileStream(rutaJson, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                        using (StreamReader sr = new StreamReader(fs))
+                        {
+                            json = sr.ReadToEnd();
+                        }
+                        var auditoria = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(json);
+                        if (auditoria != null && auditoria.Registros != null)
+                        {
+                            return auditoria.Registros.Count(r =>
+                                r.FechaHora != null && r.FechaHora.StartsWith(hoy) &&
+                                string.Equals(r.PC, pcNombre, StringComparison.OrdinalIgnoreCase) &&
+                                string.Equals(r.Usuario, usuario, StringComparison.OrdinalIgnoreCase) &&
+                                r.Accion == "Capturado");
+                        }
+                    }
+                }
+            }
+            catch { }
+            return 0;
+        }
+
+        public static List<RegistroAuditoria> ObtenerLogsNoEnviadosTodos()
+        {
+            var result = new List<RegistroAuditoria>();
+            
+            // 1. Cargar desde la carpeta del servidor (MonitoreoCaptura)
+            try
+            {
+                if (!string.IsNullOrEmpty(ModuloConfiguracion.RutaServidorAuditoria))
+                {
+                    string rutaMonitoreoRaiz = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "MonitoreoCaptura");
+                    if (ExisteDirectorioConTimeout(rutaMonitoreoRaiz, 1500))
+                    {
+                        foreach (string carpetaPC in Directory.GetDirectories(rutaMonitoreoRaiz))
+                        {
+                            string nombrePC = Path.GetFileName(carpetaPC);
+                            if (nombrePC.StartsWith("PC-", StringComparison.OrdinalIgnoreCase) || nombrePC.StartsWith("PC", StringComparison.OrdinalIgnoreCase))
+                            {
+                                string rutaJson = Path.Combine(carpetaPC, "auditoria.json");
+                                if (File.Exists(rutaJson))
+                                {
+                                    try
+                                    {
+                                        string json = "";
+                                        using (FileStream fs = new FileStream(rutaJson, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                                        using (StreamReader sr = new StreamReader(fs))
+                                        {
+                                            json = sr.ReadToEnd();
+                                        }
+                                        var obj = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(json);
+                                        if (obj != null && obj.Registros != null)
+                                        {
+                                            foreach (var reg in obj.Registros.Where(r => r.Enviado != true))
+                                            {
+                                                reg.RutaJsonOrigen = rutaJson;
+                                                result.Add(reg);
+                                            }
+                                        }
+                                    }
+                                    catch { }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            // 2. Cargar desde el archivo local y fusionar
+            try
+            {
+                string rutaJsonLocal = ObtenerRutaJsonLocal();
+                lock (_lockJson)
+                {
+                    if (File.Exists(rutaJsonLocal))
+                    {
+                        try
+                        {
+                            string jsonLocal = "";
+                            using (FileStream fs = new FileStream(rutaJsonLocal, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                            using (StreamReader sr = new StreamReader(fs))
+                            {
+                                jsonLocal = sr.ReadToEnd();
+                            }
+                            var objLocal = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(jsonLocal);
+                            if (objLocal != null && objLocal.Registros != null)
+                            {
+                                foreach (var regLocal in objLocal.Registros.Where(r => r.Enviado != true))
+                                {
+                                    // Evitar duplicados (por archivo original, PC y hora de registro)
+                                    bool yaExiste = result.Any(r =>
+                                        string.Equals(r.ArchivoOriginal, regLocal.ArchivoOriginal, StringComparison.OrdinalIgnoreCase) &&
+                                        string.Equals(r.PC, regLocal.PC, StringComparison.OrdinalIgnoreCase) &&
+                                        r.FechaHora == regLocal.FechaHora);
+
+                                    if (!yaExiste)
+                                    {
+                                        regLocal.RutaJsonOrigen = rutaJsonLocal;
+                                        result.Add(regLocal);
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { }
+
+            return result.OrderBy(r => r.FechaHora).ToList();
         }
 
         public static List<RegistroAuditoria> ObtenerRegistrosTodos()
@@ -278,23 +598,49 @@ namespace CapturaNotarias
                     }
                 }
 
-                // Fallback: Si no se pudo conectar al servidor o no hay registros, cargamos el local
-                if (!cargadoDesdeServidor)
+                // Siempre cargar los registros locales y fusionar para cubrir registros
+                // que no se hayan podido replicar al servidor por desconexión
+                string rutaJsonLocal = ObtenerRutaJsonLocal();
+                lock (_lockJson)
                 {
-                    string rutaJson = ObtenerRutaJsonLocal();
-                    if (File.Exists(rutaJson))
+                    if (File.Exists(rutaJsonLocal))
                     {
-                        string json = "";
-                        using (FileStream fs = new FileStream(rutaJson, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                        using (StreamReader sr = new StreamReader(fs))
+                        try
                         {
-                            json = sr.ReadToEnd();
+                            string jsonLocal = "";
+                            using (FileStream fs = new FileStream(rutaJsonLocal, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                            using (StreamReader sr = new StreamReader(fs))
+                            {
+                                jsonLocal = sr.ReadToEnd();
+                            }
+                            var objLocal = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(jsonLocal);
+                            if (objLocal != null && objLocal.Registros != null)
+                            {
+                                if (!cargadoDesdeServidor)
+                                {
+                                    // Sin servidor, los registros locales son todo lo que tenemos
+                                    todos.AddRange(objLocal.Registros);
+                                }
+                                else
+                                {
+                                    // Con servidor, fusionar solo registros locales que no estén ya en el servidor
+                                    // (identificados por ArchivoOriginal + PC + FechaHora exacta)
+                                    foreach (var regLocal in objLocal.Registros)
+                                    {
+                                        bool yaExisteEnServidor = todos.Any(r =>
+                                            string.Equals(r.ArchivoOriginal, regLocal.ArchivoOriginal, StringComparison.OrdinalIgnoreCase) &&
+                                            string.Equals(r.PC, regLocal.PC, StringComparison.OrdinalIgnoreCase) &&
+                                            r.FechaHora == regLocal.FechaHora);
+
+                                        if (!yaExisteEnServidor)
+                                        {
+                                            todos.Add(regLocal);
+                                        }
+                                    }
+                                }
+                            }
                         }
-                        var obj = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(json);
-                        if (obj != null && obj.Registros != null)
-                        {
-                            todos.AddRange(obj.Registros);
-                        }
+                        catch { }
                     }
                 }
             }
@@ -580,19 +926,19 @@ namespace CapturaNotarias
         {
             try
             {
-                using (var client = new System.Net.Http.HttpClient())
+                return System.Threading.Tasks.Task.Run(async () =>
                 {
-                    client.Timeout = TimeSpan.FromSeconds(15);
-                    var payload = new ArchivoAuditoriaJson { Registros = registros };
-                    string json = JsonConvert.SerializeObject(payload);
-                    var content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
+                    using (var client = new System.Net.Http.HttpClient())
+                    {
+                        client.Timeout = TimeSpan.FromSeconds(15);
+                        var payload = new ArchivoAuditoriaJson { Registros = registros };
+                        string json = JsonConvert.SerializeObject(payload);
+                        var content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
 
-                    var responseTask = client.PostAsync(ModuloConfiguracion.UrlApi, content);
-                    responseTask.Wait();
-
-                    var response = responseTask.Result;
-                    return response.IsSuccessStatusCode;
-                }
+                        var response = await client.PostAsync(ModuloConfiguracion.UrlApi, content).ConfigureAwait(false);
+                        return response.IsSuccessStatusCode;
+                    }
+                }).GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {
@@ -615,44 +961,25 @@ namespace CapturaNotarias
             try
             {
                 string rutaJsonLocal = ObtenerRutaJsonLocal();
-                if (!File.Exists(rutaJsonLocal))
-                {
-                    if (!silencioso)
-                        MessageBox.Show("No se encontraron registros de auditoría local para sincronizar.", "Información", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return;
-                }
+                List<RegistroAuditoria> logsNoEnviados = ObtenerLogsNoEnviadosTodos();
 
-                string jsonLocal = "";
-                try
-                {
-                    using (FileStream fs = new FileStream(rutaJsonLocal, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                    using (StreamReader sr = new StreamReader(fs))
-                    {
-                        jsonLocal = sr.ReadToEnd();
-                    }
-                }
-                catch
-                {
-                    if (!silencioso)
-                        MessageBox.Show("Error al leer el archivo de auditoría local.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
-                var auditoriaLocal = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(jsonLocal) ?? new ArchivoAuditoriaJson();
-                if (auditoriaLocal.Registros == null || auditoriaLocal.Registros.Count == 0)
-                {
-                    if (!silencioso)
-                        MessageBox.Show("No hay registros pendientes de sincronizar.", "Información", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return;
-                }
-
-                // Filtrar solo los registros que no se han enviado
-                var logsNoEnviados = auditoriaLocal.Registros.Where(r => r.Enviado != true).ToList();
                 if (logsNoEnviados.Count == 0)
                 {
                     if (!silencioso)
                         MessageBox.Show("Todos los registros locales ya fueron sincronizados previamente.", "Información", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
+                }
+
+                if (!silencioso)
+                {
+                    using (var frm = new FormSyncParcial(logsNoEnviados))
+                    {
+                        if (frm.ShowDialog() != DialogResult.OK)
+                        {
+                            return;
+                        }
+                        logsNoEnviados = frm.RegistrosSeleccionados;
+                    }
                 }
 
                 // Cargar config para fallback de ruta vigilada
@@ -708,7 +1035,7 @@ namespace CapturaNotarias
                     formularioProgreso.Refresh();
                 }
 
-                // Intentar copiar cada archivo y preparar la lista de logs a enviar
+                // 2. Fase de copia de archivos y envío HTTP (Fuera de lock para no colgar ni bloquear capturas)
                 var logsAEnviar = new System.Collections.Generic.List<RegistroAuditoria>();
                 
                 int indice = 0;
@@ -724,38 +1051,132 @@ namespace CapturaNotarias
                     }
 
                     string rutaLocal = log.RutaLocal ?? "";
-                    
-                    // Fallback para registros antiguos
+                    if (string.IsNullOrEmpty(rutaLocal))
+                    {
+                        if (log.Detalles != null && log.Detalles.StartsWith("PDF Escaneado en ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            rutaLocal = log.Detalles.Substring("PDF Escaneado en ".Length);
+                        }
+                    }
                     if (string.IsNullOrEmpty(rutaLocal) && !string.IsNullOrEmpty(ultimaRuta))
                     {
                         rutaLocal = Path.Combine(ultimaRuta, log.ArchivoOriginal ?? "");
                     }
-                    
-                    if (!string.IsNullOrEmpty(rutaLocal) && File.Exists(rutaLocal))
+
+                    // El servidor de destino central real (VPN) para guardar los PDFs
+                    string baseServidor = @"\\172.40.5.84\ssdirec\NOTARIAS";
+
+                    // El servidor local del escáner (de donde obtenemos los archivos originales)
+                    string rutaAuditoriaLocal = !string.IsNullOrEmpty(ModuloConfiguracion.RutaServidorAuditoria)
+                        ? ModuloConfiguracion.RutaServidorAuditoria
+                        : @"\\192.168.1.10\NOTARIAS";
+
+                    // Construir el destino final limpio conservando la estructura de carpetas (ej. NOTARIA 53\VOLUMEN 24)
+                    string destinoArchivo = "";
+                    if (!string.IsNullOrEmpty(rutaLocal) && rutaLocal.Length >= 3 && rutaLocal[1] == ':' && rutaLocal[2] == '\\')
                     {
+                        string rutaSinUnidad = rutaLocal.Substring(3);
+                        string folderBase = Path.GetFileName(baseServidor);
+                        string[] segmentos = rutaSinUnidad.Split('\\');
+                        string primerSegmento = segmentos.Length > 0 ? segmentos[0] : "";
+
+                        if (string.Equals(folderBase, primerSegmento, StringComparison.OrdinalIgnoreCase))
+                        {
+                            string subrutaLimpia = string.Join("\\", segmentos, 1, segmentos.Length - 1);
+                            destinoArchivo = Path.Combine(baseServidor, subrutaLimpia);
+                        }
+                        else
+                        {
+                            destinoArchivo = Path.Combine(baseServidor, rutaSinUnidad);
+                        }
+                    }
+                    else
+                    {
+                        string destinoCarpeta = Path.Combine(baseServidor, log.Notaria ?? "General");
+                        destinoArchivo = !string.IsNullOrEmpty(log.ArchivoOriginal) ? Path.Combine(destinoCarpeta, log.ArchivoOriginal) : "";
+                    }
+
+                    // Resolver la ruta local de origen (rutaLocalResolved) usando la ruta local del escáner (rutaAuditoriaLocal)
+                    // si estamos en el servidor y la ruta tiene una unidad mapeada (como Z:\) que el servidor no puede acceder directamente.
+                    string rutaLocalResolved = rutaLocal;
+                    bool existeLocal = !string.IsNullOrEmpty(rutaLocalResolved) && File.Exists(rutaLocalResolved);
+
+                    if (!existeLocal && !string.IsNullOrEmpty(rutaLocal) && rutaLocal.Length >= 3 && rutaLocal[1] == ':' && rutaLocal[2] == '\\')
+                    {
+                        string rutaSinUnidad = rutaLocal.Substring(3);
+
+                        // Posibilidad A: Carpeta con segmento duplicado usando la ruta de origen local (ej. Z:\NOTARIAS\NOTARIA 53... -> C:\NOTARIAS\NOTARIAS\NOTARIA 53...)
+                        string rutaA = Path.Combine(rutaAuditoriaLocal, rutaSinUnidad);
+
+                        // Posibilidad B: Carpeta sin duplicar segmento usando la ruta de origen local (ej. C:\NOTARIAS\NOTARIA 53...)
+                        string folderBase = Path.GetFileName(rutaAuditoriaLocal);
+                        string[] segmentos = rutaSinUnidad.Split('\\');
+                        string primerSegmento = segmentos.Length > 0 ? segmentos[0] : "";
+                        string rutaB = "";
+                        
+                        if (string.Equals(folderBase, primerSegmento, StringComparison.OrdinalIgnoreCase))
+                        {
+                            string subrutaLimpia = string.Join("\\", segmentos, 1, segmentos.Length - 1);
+                            rutaB = Path.Combine(rutaAuditoriaLocal, subrutaLimpia);
+                        }
+                        else
+                        {
+                            string parentBase = Path.GetDirectoryName(rutaAuditoriaLocal) ?? "";
+                            if (!string.IsNullOrEmpty(parentBase))
+                            {
+                                rutaB = Path.Combine(parentBase, rutaSinUnidad);
+                            }
+                        }
+
+                        if (File.Exists(rutaA))
+                        {
+                            rutaLocalResolved = rutaA;
+                            existeLocal = true;
+                        }
+                        else if (!string.IsNullOrEmpty(rutaB) && File.Exists(rutaB))
+                        {
+                            rutaLocalResolved = rutaB;
+                            existeLocal = true;
+                        }
+                    }
+
+                    bool existeDestino = !string.IsNullOrEmpty(destinoArchivo) && File.Exists(destinoArchivo);
+
+                    // Si origen y destino coinciden físicamente, consideramos que el archivo ya está en el destino.
+                    if (existeLocal && !string.IsNullOrEmpty(destinoArchivo) && string.Equals(Path.GetFullPath(rutaLocalResolved), Path.GetFullPath(destinoArchivo), StringComparison.OrdinalIgnoreCase))
+                    {
+                        existeDestino = true;
+                    }
+
+                    if (existeDestino)
+                    {
+                        // El archivo ya está en el servidor de destino (copiado previamente o guardado directo en red)
+                        logsAEnviar.Add(log);
+                    }
+                    else if (existeLocal)
+                    {
+                        // El archivo está local en esta PC y no se ha copiado al servidor aún
                         try
                         {
-                            string destinoCarpeta = Path.Combine(@"\\172.40.5.84\ssdirec\NOTARIAS", log.Notaria ?? "General");
+                            string destinoCarpeta = Path.GetDirectoryName(destinoArchivo) ?? "";
                             if (!Directory.Exists(destinoCarpeta))
                             {
                                 Directory.CreateDirectory(destinoCarpeta);
                             }
-                            
-                            string destinoArchivo = Path.Combine(destinoCarpeta, log.ArchivoOriginal ?? "");
-                            
-                            // Copiar el archivo al servidor central ssdirec
-                            File.Copy(rutaLocal, destinoArchivo, true);
-                            
+
+                            // Copiar el archivo al servidor central
+                            File.Copy(rutaLocalResolved, destinoArchivo, true);
+
                             // Si se copió con éxito, intentar borrarlo localmente
                             try
                             {
-                                File.Delete(rutaLocal);
+                                File.Delete(rutaLocalResolved);
                             }
                             catch (Exception exDel)
                             {
                                 System.Diagnostics.Debug.WriteLine("No se pudo eliminar el archivo local: " + exDel.Message);
                             }
-                            
+
                             logsAEnviar.Add(log);
                         }
                         catch (Exception exCopy)
@@ -766,9 +1187,23 @@ namespace CapturaNotarias
                     }
                     else
                     {
-                        // Si el archivo ya no existe localmente (por ejemplo, borrado manual), 
-                        // agregamos el log para que no se quede atascado.
-                        logsAEnviar.Add(log);
+                        // No existe ni localmente ni en el destino.
+                        // ¿Este registro pertenece a esta PC?
+                        string pcActual = string.IsNullOrEmpty(ModuloConfiguracion.NombrePC) ? Environment.MachineName : ModuloConfiguracion.NombrePC;
+                        bool esDeEstaPC = string.Equals(log.PC, pcActual, StringComparison.OrdinalIgnoreCase);
+
+                        if (esDeEstaPC)
+                        {
+                            // Si es de esta PC y no existe en ningún lado, se asume perdido/borrado manual.
+                            // Se agrega para no dejar el registro trabado.
+                            logsAEnviar.Add(log);
+                        }
+                        else
+                        {
+                            // Si es de otra PC, significa que la otra PC no ha copiado su archivo a ssdirec todavía.
+                            // NO lo agregamos a logsAEnviar para que no se marque como enviado y podamos esperar a que la otra PC lo suba.
+                            System.Diagnostics.Debug.WriteLine(string.Format("El archivo {0} de la PC {1} aún no existe en ssdirec. Se pospone envío.", log.ArchivoOriginal, log.PC));
+                        }
                     }
                 }
 
@@ -780,7 +1215,115 @@ namespace CapturaNotarias
                     }
                     if (!silencioso)
                     {
-                        MessageBox.Show("No se pudieron copiar los archivos al servidor central ssdirec. Verifique su conexión de red.", "Error de Sincronización", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        string detalleRutas = "";
+                        if (logsNoEnviados.Count > 0)
+                        {
+                            var primerLog = logsNoEnviados[0];
+                            string rutaLoc = primerLog.RutaLocal ?? "";
+                            if (string.IsNullOrEmpty(rutaLoc) && !string.IsNullOrEmpty(ultimaRuta))
+                            {
+                                rutaLoc = Path.Combine(ultimaRuta, primerLog.ArchivoOriginal ?? "");
+                            }
+
+                            string baseServ = @"\\172.40.5.84\ssdirec\NOTARIAS";
+                            string rutaAudLoc = !string.IsNullOrEmpty(ModuloConfiguracion.RutaServidorAuditoria)
+                                ? ModuloConfiguracion.RutaServidorAuditoria
+                                : @"\\192.168.1.10\NOTARIAS";
+
+                            // Destino
+                            string destArch = "";
+                            if (!string.IsNullOrEmpty(rutaLoc) && rutaLoc.Length >= 3 && rutaLoc[1] == ':' && rutaLoc[2] == '\\')
+                            {
+                                string rutaSinUnidad = rutaLoc.Substring(3);
+                                string folderBase = Path.GetFileName(baseServ);
+                                string[] segmentos = rutaSinUnidad.Split('\\');
+                                string primerSegmento = segmentos.Length > 0 ? segmentos[0] : "";
+
+                                if (string.Equals(folderBase, primerSegmento, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    string subrutaLimpia = string.Join("\\", segmentos, 1, segmentos.Length - 1);
+                                    destArch = Path.Combine(baseServ, subrutaLimpia);
+                                }
+                                else
+                                {
+                                    destArch = Path.Combine(baseServ, rutaSinUnidad);
+                                }
+                            }
+                            else
+                            {
+                                string destCarp = Path.Combine(baseServ, primerLog.Notaria ?? "General");
+                                destArch = !string.IsNullOrEmpty(primerLog.ArchivoOriginal) ? Path.Combine(destCarp, primerLog.ArchivoOriginal) : "";
+                            }
+
+                            // Origen
+                            string rutaLocRes = rutaLoc;
+                            bool existeLoc = !string.IsNullOrEmpty(rutaLocRes) && File.Exists(rutaLocRes);
+                            string rutaA = "";
+                            string rutaB = "";
+
+                            if (!existeLoc && !string.IsNullOrEmpty(rutaLoc) && rutaLoc.Length >= 3 && rutaLoc[1] == ':' && rutaLoc[2] == '\\')
+                            {
+                                string rutaSinUnidad = rutaLoc.Substring(3);
+                                rutaA = Path.Combine(rutaAudLoc, rutaSinUnidad);
+
+                                string folderBase = Path.GetFileName(rutaAudLoc);
+                                string[] segmentos = rutaSinUnidad.Split('\\');
+                                string primerSegmento = segmentos.Length > 0 ? segmentos[0] : "";
+                                
+                                if (string.Equals(folderBase, primerSegmento, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    string subrutaLimpia = string.Join("\\", segmentos, 1, segmentos.Length - 1);
+                                    rutaB = Path.Combine(rutaAudLoc, subrutaLimpia);
+                                }
+                                else
+                                {
+                                    string parentBase = Path.GetDirectoryName(rutaAudLoc) ?? "";
+                                    if (!string.IsNullOrEmpty(parentBase))
+                                    {
+                                        rutaB = Path.Combine(parentBase, rutaSinUnidad);
+                                    }
+                                }
+
+                                if (File.Exists(rutaA))
+                                {
+                                    rutaLocRes = rutaA;
+                                    existeLoc = true;
+                                }
+                                else if (!string.IsNullOrEmpty(rutaB) && File.Exists(rutaB))
+                                {
+                                    rutaLocRes = rutaB;
+                                    existeLoc = true;
+                                }
+                            }
+
+                            bool existeDest = !string.IsNullOrEmpty(destArch) && File.Exists(destArch);
+
+                            detalleRutas = string.Format(
+                                "\n\nDetalles de búsqueda (primer archivo):\n" +
+                                "- Archivo original: {0}\n" +
+                                "- Ruta local en log: {1}\n" +
+                                "- Carpeta compartida origen: {2}\n" +
+                                "- Carpeta destino (VPN): {3}\n" +
+                                "- Origen resuelto: {4}\n" +
+                                "- Destino resuelto: {5}\n" +
+                                "- ¿Existe origen?: {6}\n" +
+                                "- ¿Existe destino?: {7}\n" +
+                                "- Intentó buscar origen duplicado en: {8}\n" +
+                                "- Intentó buscar origen limpio en: {9}",
+                                primerLog.ArchivoOriginal,
+                                rutaLoc,
+                                rutaAudLoc,
+                                baseServ,
+                                rutaLocRes,
+                                destArch,
+                                existeLoc ? "SÍ" : "NO",
+                                existeDest ? "SÍ" : "NO",
+                                string.IsNullOrEmpty(rutaA) ? "N/A" : rutaA,
+                                string.IsNullOrEmpty(rutaB) ? "N/A" : rutaB
+                            );
+                        }
+
+                        MessageBox.Show("No se pudieron transferir los archivos al servidor central. Verifique que la ruta del servidor configurada esté accesible y que su conexión de red sea estable." + detalleRutas, "Error de Sincronización", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     }
                     return;
                 }
@@ -804,19 +1347,78 @@ namespace CapturaNotarias
 
                 if (exito)
                 {
-                    // Marcar como enviados
-                    foreach (var reg in logsAEnviar)
-                    {
-                        reg.Enviado = true;
-                    }
+                    // 3. Fase de actualización y escritura segura
+                    // Agrupamos los logs enviados exitosamente por su archivo JSON de origen
+                    var logsPorOrigen = logsAEnviar
+                        .Where(l => !string.IsNullOrEmpty(l.RutaJsonOrigen))
+                        .GroupBy(l => l.RutaJsonOrigen!);
 
-                    // Guardar de vuelta en el archivo local con el flag actualizado
-                    try
+                    foreach (var grupo in logsPorOrigen)
                     {
-                        string jsonActualizado = JsonConvert.SerializeObject(auditoriaLocal, Formatting.Indented);
-                        File.WriteAllText(rutaJsonLocal, jsonActualizado);
+                        string rutaJson = grupo.Key;
+                        bool esLocal = (rutaJson == rutaJsonLocal);
+
+                        Action guardar = () =>
+                        {
+                            if (File.Exists(rutaJson))
+                            {
+                                try
+                                {
+                                    string jsonActual = "";
+                                    using (FileStream fs = new FileStream(rutaJson, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                                    using (StreamReader sr = new StreamReader(fs))
+                                    {
+                                        jsonActual = sr.ReadToEnd();
+                                    }
+
+                                    var auditoriaActual = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(jsonActual);
+                                    if (auditoriaActual?.Registros != null)
+                                    {
+                                        foreach (var logEnviado in grupo)
+                                        {
+                                            var reg = auditoriaActual.Registros.FirstOrDefault(r =>
+                                                string.Equals(r.ArchivoOriginal, logEnviado.ArchivoOriginal, StringComparison.OrdinalIgnoreCase) &&
+                                                string.Equals(r.PC, logEnviado.PC, StringComparison.OrdinalIgnoreCase) &&
+                                                r.FechaHora == logEnviado.FechaHora);
+
+                                            if (reg != null)
+                                            {
+                                                reg.Enviado = true;
+                                            }
+                                        }
+
+                                        string jsonActualizado = JsonConvert.SerializeObject(auditoriaActual, Formatting.Indented);
+
+                                        for (int i = 0; i < 3; i++)
+                                        {
+                                            try
+                                            {
+                                                File.WriteAllText(rutaJson, jsonActualizado);
+                                                break;
+                                            }
+                                            catch
+                                            {
+                                                System.Threading.Thread.Sleep(500);
+                                            }
+                                        }
+                                    }
+                                }
+                                catch { }
+                            }
+                        };
+
+                        if (esLocal)
+                        {
+                            lock (_lockJson)
+                            {
+                                guardar();
+                            }
+                        }
+                        else
+                        {
+                            guardar();
+                        }
                     }
-                    catch { }
 
                     if (!silencioso)
                     {
