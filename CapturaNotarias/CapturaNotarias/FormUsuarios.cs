@@ -32,7 +32,8 @@ namespace CapturaNotarias
         private ComboBox cmbTurno = null!;
         private Button btnAgregar = null!;
         private Button btnEliminar = null!;
-        private Button btnCerrar = null!;
+        private Button btnEditarUsuario = null!;
+        private Button btnIntercambiar = null!;
 
         public FormUsuarios()
         {
@@ -42,7 +43,7 @@ namespace CapturaNotarias
         private void InitializeComponent()
         {
             this.Text = "Administración de Usuarios";
-            this.Size = new System.Drawing.Size(484, 470);
+            this.Size = new System.Drawing.Size(514, 470);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -51,7 +52,7 @@ namespace CapturaNotarias
             dgvUsuarios = new DataGridView()
             {
                 Location = new System.Drawing.Point(12, 12),
-                Size = new System.Drawing.Size(445, 200),
+                Size = new System.Drawing.Size(475, 200),
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = false,
                 ReadOnly = true,
@@ -78,13 +79,15 @@ namespace CapturaNotarias
             cmbTurno.Items.AddRange(new string[] { "Matutino", "Vespertino", "Nocturno" });
             cmbTurno.SelectedIndex = 0;
 
-            btnAgregar = new Button() { Text = "Agregar", Location = new System.Drawing.Point(12, 380), Size = new System.Drawing.Size(120, 35), FlatStyle = FlatStyle.Popup, Font = fontGeneral };
-            btnEliminar = new Button() { Text = "Eliminar", Location = new System.Drawing.Point(150, 380), Size = new System.Drawing.Size(120, 35), FlatStyle = FlatStyle.Popup, Font = fontGeneral };
-            btnCerrar = new Button() { Text = "Cerrar", Location = new System.Drawing.Point(335, 380), Size = new System.Drawing.Size(120, 35), FlatStyle = FlatStyle.Popup, Font = fontGeneral };
+            btnAgregar = new Button() { Text = "Agregar", Location = new System.Drawing.Point(12, 380), Size = new System.Drawing.Size(110, 35), FlatStyle = FlatStyle.Popup, Font = fontGeneral };
+            btnEliminar = new Button() { Text = "Eliminar", Location = new System.Drawing.Point(132, 380), Size = new System.Drawing.Size(110, 35), FlatStyle = FlatStyle.Popup, Font = fontGeneral };
+            btnEditarUsuario = new Button() { Text = "Editar Usuario", Location = new System.Drawing.Point(252, 380), Size = new System.Drawing.Size(110, 35), FlatStyle = FlatStyle.Popup, Font = fontGeneral };
+            btnIntercambiar = new Button() { Text = "Cambiar Turnos", Location = new System.Drawing.Point(372, 380), Size = new System.Drawing.Size(115, 35), FlatStyle = FlatStyle.Popup, Font = fontGeneral };
 
             btnAgregar.Click += BtnAgregar_Click;
             btnEliminar.Click += BtnEliminar_Click;
-            btnCerrar.Click += BtnCerrar_Click;
+            btnEditarUsuario.Click += BtnEditarUsuario_Click;
+            btnIntercambiar.Click += BtnIntercambiar_Click;
 
             this.Controls.Add(dgvUsuarios);
             this.Controls.Add(lblNombre);
@@ -97,7 +100,8 @@ namespace CapturaNotarias
             this.Controls.Add(cmbTurno);
             this.Controls.Add(btnAgregar);
             this.Controls.Add(btnEliminar);
-            this.Controls.Add(btnCerrar);
+            this.Controls.Add(btnEditarUsuario);
+            this.Controls.Add(btnIntercambiar);
 
             CargarTabla();
         }
@@ -230,9 +234,175 @@ namespace CapturaNotarias
             }
         }
 
-        private void BtnCerrar_Click(object? sender, EventArgs e)
+        private void BtnIntercambiar_Click(object? sender, EventArgs e)
         {
-            this.Close();
+            var confirm = MessageBox.Show(
+                "Esta acción cambiará el turno de TODOS los usuarios (de Matutino a Vespertino y viceversa).\n¿Está seguro de que desea continuar?",
+                "Confirmar Cambio de Turnos",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question
+            );
+
+            if (confirm == DialogResult.Yes)
+            {
+                var datos = CargarDatos();
+                bool huboCambios = false;
+
+                foreach (var usuario in datos.Usuarios)
+                {
+                    string turnoActual = usuario.Turno ?? "Matutino";
+
+                    if (turnoActual.Equals("Matutino", StringComparison.OrdinalIgnoreCase))
+                    {
+                        usuario.Turno = "Vespertino";
+                        huboCambios = true;
+                    }
+                    else if (turnoActual.Equals("Vespertino", StringComparison.OrdinalIgnoreCase))
+                    {
+                        usuario.Turno = "Matutino";
+                        huboCambios = true;
+                    }
+                }
+
+                if (huboCambios)
+                {
+                    GuardarDatos(datos);
+                    CargarTabla();
+                    MessageBox.Show("Se han intercambiado los turnos de todos los usuarios.", "Éxito", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    MessageBox.Show("No se encontraron usuarios con turno Matutino o Vespertino para intercambiar.", "Información", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+        }
+
+        private void BtnEditarUsuario_Click(object? sender, EventArgs e)
+        {
+            if (dgvUsuarios.SelectedRows.Count == 0)
+            {
+                MessageBox.Show("Seleccione un usuario de la lista.");
+                return;
+            }
+
+            int id = (int)dgvUsuarios.SelectedRows[0].Cells["ID"].Value;
+            var datos = CargarDatos();
+            var usuario = datos.Usuarios.FirstOrDefault(u => u.Id == id);
+
+            if (usuario == null) return;
+
+            using (var formEditar = new FormEditarUsuario(usuario))
+            {
+                if (formEditar.ShowDialog() == DialogResult.OK)
+                {
+                    string nuevoUser = formEditar.NombreUsuario;
+                    if (datos.Usuarios.Any(u => u.Id != id && u.NombreUsuario != null && u.NombreUsuario.Equals(nuevoUser, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        MessageBox.Show("Ese nombre de usuario ya existe en otro registro.");
+                        return;
+                    }
+
+                    usuario.NombreCompleto = formEditar.NombreCompleto;
+                    usuario.NombreUsuario = nuevoUser;
+                    usuario.Pin = formEditar.Pin;
+                    usuario.Turno = formEditar.Turno;
+
+                    GuardarDatos(datos);
+                    CargarTabla();
+                    MessageBox.Show("Usuario actualizado correctamente.", "Éxito", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+        }
+    }
+
+    public class FormEditarUsuario : Form
+    {
+        private TextBox txtNombreCompleto = null!;
+        private TextBox txtNombreUsuario = null!;
+        private TextBox txtPinUsuario = null!;
+        private ComboBox cmbTurno = null!;
+        private Button btnGuardar = null!;
+        private Button btnCancelar = null!;
+
+        public string NombreCompleto => txtNombreCompleto.Text.Trim();
+        public string NombreUsuario => txtNombreUsuario.Text.Trim();
+        public string Pin => txtPinUsuario.Text.Trim();
+        public string Turno => cmbTurno.SelectedItem?.ToString() ?? "Matutino";
+
+        public FormEditarUsuario(Usuario usuario)
+        {
+            InitializeComponent(usuario);
+        }
+
+        private void InitializeComponent(Usuario usuario)
+        {
+            this.Text = "Editar Usuario";
+            this.Size = new System.Drawing.Size(400, 320);
+            this.StartPosition = FormStartPosition.CenterParent;
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.MaximizeBox = false;
+            this.MinimizeBox = false;
+
+            var fontGeneral = new System.Drawing.Font("Arial Narrow", 12F, System.Drawing.FontStyle.Regular);
+
+            Label lblNombre = new Label() { Text = "Nombre completo:", Location = new System.Drawing.Point(12, 20), AutoSize = true, Font = fontGeneral };
+            txtNombreCompleto = new TextBox() { Text = usuario.NombreCompleto, Location = new System.Drawing.Point(150, 17), Width = 220, Font = fontGeneral, CharacterCasing = CharacterCasing.Upper, BorderStyle = BorderStyle.FixedSingle };
+
+            Label lblUsuario = new Label() { Text = "Usuario:", Location = new System.Drawing.Point(12, 60), AutoSize = true, Font = fontGeneral };
+            txtNombreUsuario = new TextBox() { Text = usuario.NombreUsuario, Location = new System.Drawing.Point(150, 57), Width = 150, Font = fontGeneral, BorderStyle = BorderStyle.FixedSingle };
+
+            Label lblPin = new Label() { Text = "PIN:", Location = new System.Drawing.Point(12, 100), AutoSize = true, Font = fontGeneral };
+            txtPinUsuario = new TextBox() { Text = usuario.Pin, Location = new System.Drawing.Point(150, 97), Width = 80, MaxLength = 4, PasswordChar = '*', Font = fontGeneral, BorderStyle = BorderStyle.FixedSingle };
+            txtPinUsuario.KeyPress += (s, e) => {
+                if (!char.IsDigit(e.KeyChar) && e.KeyChar != (char)Keys.Back)
+                    e.Handled = true;
+            };
+
+            Label lblTurno = new Label() { Text = "Turno:", Location = new System.Drawing.Point(12, 140), AutoSize = true, Font = fontGeneral };
+            cmbTurno = new ComboBox() { Location = new System.Drawing.Point(150, 137), Width = 150, Font = fontGeneral, DropDownStyle = ComboBoxStyle.DropDownList };
+            cmbTurno.Items.AddRange(new string[] { "Matutino", "Vespertino", "Nocturno" });
+            cmbTurno.SelectedItem = usuario.Turno ?? "Matutino";
+
+            btnGuardar = new Button() { Text = "Guardar", Location = new System.Drawing.Point(120, 200), Size = new System.Drawing.Size(110, 35), FlatStyle = FlatStyle.Popup, Font = fontGeneral, DialogResult = DialogResult.OK };
+            btnCancelar = new Button() { Text = "Cancelar", Location = new System.Drawing.Point(240, 200), Size = new System.Drawing.Size(110, 35), FlatStyle = FlatStyle.Popup, Font = fontGeneral, DialogResult = DialogResult.Cancel };
+
+            btnGuardar.Click += BtnGuardar_Click;
+
+            this.Controls.Add(lblNombre);
+            this.Controls.Add(txtNombreCompleto);
+            this.Controls.Add(lblUsuario);
+            this.Controls.Add(txtNombreUsuario);
+            this.Controls.Add(lblPin);
+            this.Controls.Add(txtPinUsuario);
+            this.Controls.Add(lblTurno);
+            this.Controls.Add(cmbTurno);
+            this.Controls.Add(btnGuardar);
+            this.Controls.Add(btnCancelar);
+
+            this.AcceptButton = btnGuardar;
+            this.CancelButton = btnCancelar;
+        }
+
+        private void BtnGuardar_Click(object? sender, EventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(NombreCompleto))
+            {
+                MessageBox.Show("Ingrese el nombre completo.");
+                this.DialogResult = DialogResult.None;
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(NombreUsuario))
+            {
+                MessageBox.Show("Ingrese el nombre de usuario.");
+                this.DialogResult = DialogResult.None;
+                return;
+            }
+            if (Pin.Length != 4)
+            {
+                MessageBox.Show("El PIN debe ser de 4 dígitos.");
+                this.DialogResult = DialogResult.None;
+                return;
+            }
         }
     }
 }

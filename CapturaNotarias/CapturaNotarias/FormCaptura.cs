@@ -135,10 +135,22 @@ namespace CapturaNotarias
         {
             // Este evento ocurre en un hilo en segundo plano
             string archivo = e.Name ?? "Desconocido";
+
+            // Mostrar retroalimentación inmediata al usuario en la UI
+            this.Invoke((MethodInvoker)delegate
+            {
+                lblRuta.Text = "Procesando: " + archivo + "... (Contando páginas)";
+                lblRuta.ForeColor = Color.DarkOrange;
+            });
+
             string resultado = ModuloAuditoria.RegistrarAccion(notariaActual, archivo, e.FullPath, "PDF Escaneado en " + e.FullPath);
 
             this.Invoke((MethodInvoker)delegate
             {
+                // Restaurar la ruta vigilada
+                lblRuta.Text = "Vigilando: " + configLocal.UltimaRutaVigilada;
+                lblRuta.ForeColor = Color.DimGray;
+
                 if (resultado == "OK")
                 {
                     contadorSesion++;
