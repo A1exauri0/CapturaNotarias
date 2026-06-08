@@ -151,21 +151,67 @@ namespace CapturaNotarias
 
         private void BtnConfig_Click(object? sender, EventArgs e)
         {
-            Form prompt = new Form() { Width = 500, Height = 240, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Configuración General", StartPosition = FormStartPosition.CenterScreen };
+            Form prompt = new Form() { Width = 500, Height = 330, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Configuración General", StartPosition = FormStartPosition.CenterScreen };
             Label textLabel = new Label() { Left = 20, Top = 20, Width = 400, Text = "Ruta del Servidor Local (Donde están usuarios.json):" };
             TextBox textBox = new TextBox() { Left = 20, Top = 50, Width = 400, Text = ModuloConfiguracion.RutaServidorAuditoria };
             
             Label pcLabel = new Label() { Left = 20, Top = 85, Width = 150, Text = "Identificación de esta PC:" };
             TextBox pcTextBox = new TextBox() { Left = 180, Top = 82, Width = 100, Text = ModuloConfiguracion.NombrePC };
+
+            Label lugarLabel = new Label() { Left = 20, Top = 120, Width = 150, Text = "Lugar de Trabajo:" };
+            ComboBox lugarComboBox = new ComboBox() { Left = 180, Top = 117, Width = 150, DropDownStyle = ComboBoxStyle.DropDownList };
+            lugarComboBox.Items.Add("5 de mayo - 1");
+            lugarComboBox.Items.Add("5 de mayo - 2");
+            lugarComboBox.Items.Add("IREC");
+            lugarComboBox.Items.Add("RPP");
+
+            if (!string.IsNullOrEmpty(ModuloConfiguracion.LugarTrabajo))
+            {
+                lugarComboBox.SelectedItem = ModuloConfiguracion.LugarTrabajo;
+            }
+            else
+            {
+                lugarComboBox.SelectedIndex = 0;
+            }
+
+            Label tipoLabel = new Label() { Left = 20, Top = 155, Width = 150, Text = "Tipo de Captura:" };
+            ComboBox tipoComboBox = new ComboBox() { Left = 180, Top = 152, Width = 150, DropDownStyle = ComboBoxStyle.DropDownList };
+            tipoComboBox.Items.Add("NOTARIAS");
+            tipoComboBox.Items.Add("LIBROS");
+            tipoComboBox.Items.Add("NOMINAS");
+            tipoComboBox.SelectedItem = ModuloConfiguracion.TipoCaptura;
+
+            tipoComboBox.SelectedIndexChanged += (s, ev) => {
+                string nuevoTipo = tipoComboBox.SelectedItem?.ToString() ?? "NOTARIAS";
+                string rutaActual = textBox.Text.Trim();
+                
+                // Si la ruta actual coincide con alguna de las predeterminadas, la actualizamos automáticamente
+                if (rutaActual.Equals(@"\\192.168.1.10\NOTARIAS", StringComparison.OrdinalIgnoreCase) ||
+                    rutaActual.Equals(@"\\192.168.1.10\LIBROS", StringComparison.OrdinalIgnoreCase) ||
+                    rutaActual.Equals(@"\\192.168.1.10\NOMINAS", StringComparison.OrdinalIgnoreCase))
+                {
+                    textBox.Text = @"\\192.168.1.10\" + nuevoTipo;
+                }
+                else if (rutaActual.Equals(@"C:\NOTARIAS", StringComparison.OrdinalIgnoreCase) ||
+                         rutaActual.Equals(@"C:\LIBROS", StringComparison.OrdinalIgnoreCase) ||
+                         rutaActual.Equals(@"C:\NOMINAS", StringComparison.OrdinalIgnoreCase))
+                {
+                    textBox.Text = @"C:\" + nuevoTipo;
+                }
+            };
             
-            CheckBox chkEnvio = new CheckBox() { Left = 20, Top = 120, Width = 450, Text = "Activar envío automático de auditorías al servidor central", Checked = ModuloConfiguracion.ActivarEnvioAuditoria };
+            CheckBox chkEnvio = new CheckBox() { Left = 20, Top = 195, Width = 450, Text = "Activar envío automático de auditorías al servidor central", Checked = ModuloConfiguracion.ActivarEnvioAuditoria };
             
-            Button confirmation = new Button() { Text = "Guardar", Left = 340, Width = 100, Top = 160, DialogResult = DialogResult.OK };
+            Button confirmation = new Button() { Text = "Guardar", Left = 340, Width = 100, Top = 240, DialogResult = DialogResult.OK };
             
             prompt.Controls.Add(textLabel);
             prompt.Controls.Add(textBox);
             prompt.Controls.Add(pcLabel);
             prompt.Controls.Add(pcTextBox);
+            prompt.Controls.Add(lugarLabel);
+            prompt.Controls.Add(lugarComboBox);
+            prompt.Controls.Add(tipoLabel);
+            prompt.Controls.Add(tipoComboBox);
             prompt.Controls.Add(chkEnvio);
             prompt.Controls.Add(confirmation);
             prompt.AcceptButton = confirmation;
@@ -190,8 +236,13 @@ namespace CapturaNotarias
                     }
                 }
 
+                string lugarSeleccionado = lugarComboBox.SelectedItem?.ToString() ?? "";
+                string tipoSeleccionado = tipoComboBox.SelectedItem?.ToString() ?? "NOTARIAS";
+
                 ModuloConfiguracion.RutaServidorAuditoria = textBox.Text;
                 ModuloConfiguracion.ActivarEnvioAuditoria = chkEnvio.Checked;
+                ModuloConfiguracion.LugarTrabajo = lugarSeleccionado;
+                ModuloConfiguracion.TipoCaptura = tipoSeleccionado;
                 if (!string.IsNullOrEmpty(pcNombreValido))
                 {
                     ModuloConfiguracion.NombrePC = pcNombreValido;
@@ -200,6 +251,8 @@ namespace CapturaNotarias
                 ConfiguracionApp conf = ModuloConfiguracion.CargarConfiguracion();
                 conf.RutaServidorAuditoria = textBox.Text;
                 conf.ActivarEnvioAuditoria = chkEnvio.Checked;
+                conf.LugarTrabajo = lugarSeleccionado;
+                conf.TipoCaptura = tipoSeleccionado;
                 if (!string.IsNullOrEmpty(pcNombreValido))
                 {
                     conf.NombrePC = pcNombreValido;

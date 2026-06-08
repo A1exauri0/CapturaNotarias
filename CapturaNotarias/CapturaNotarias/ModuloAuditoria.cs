@@ -38,32 +38,52 @@ namespace CapturaNotarias
         private static readonly object _lockJson = new object();
         private static bool _migracionRealizada = false;
 
-        private static bool EsperarArchivoListo(string ruta, int timeoutSegundos = 300)
+        private static bool EsperarArchivoListo(string ruta, int timeoutSegundos = 30)
         {
-            for (int i = 0; i < timeoutSegundos; i++)
+            long ultimoTamano = -1;
+            int vecesIgual = 0;
+
+            // Tiempo de gracia inicial para permitir al escáner empezar a escribir el archivo
+            System.Threading.Thread.Sleep(1500);
+
+            for (int i = 0; i < timeoutSegundos * 2; i++)
             {
                 try
                 {
                     if (File.Exists(ruta))
                     {
                         var info = new FileInfo(ruta);
-                        if (info.Length > 0)
+                        long tamanoActual = info.Length;
+
+                        if (tamanoActual > 0)
                         {
-                            // Intentar abrir con acceso exclusivo (sin compartir) para confirmar que se terminó de escribir
-                            using (var fs = new FileStream(ruta, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                            if (tamanoActual == ultimoTamano)
                             {
-                                return true;
+                                vecesIgual++;
+                                // Si el tamaño no varía por 1.5 segundos (3 iteraciones), comprobamos lectura
+                                if (vecesIgual >= 3)
+                                {
+                                    // Abrimos sin forzar exclusividad para no interferir con otros programas
+                                    using (var fs = new FileStream(ruta, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                                    {
+                                        return true;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                ultimoTamano = tamanoActual;
+                                vecesIgual = 0;
                             }
                         }
                     }
                 }
-                catch (IOException)
+                catch
                 {
-                    // Sigue bloqueado por el escáner (se está escribiendo)
+                    vecesIgual = 0;
                 }
-                catch { }
 
-                System.Threading.Thread.Sleep(1000);
+                System.Threading.Thread.Sleep(500);
             }
             return false;
         }
@@ -105,9 +125,9 @@ namespace CapturaNotarias
                 return 1;
 
             // Esperar a que el archivo deje de estar bloqueado por el escáner
-            if (!EsperarArchivoListo(rutaCompleta, 300))
+            if (!EsperarArchivoListo(rutaCompleta, 30))
             {
-                // Si pasaron 5 minutos y no se liberó, procedemos con lo que haya
+                // Si pasaron 30 segundos y no se liberó, procedemos con lo que haya
                 if (!File.Exists(rutaCompleta)) return 1;
             }
 
@@ -226,6 +246,16 @@ namespace CapturaNotarias
                     }
 
                     // Inyectamos el nuevo registro
+                    string notariaResuelta = notaria;
+                    if (string.IsNullOrEmpty(notariaResuelta) || notariaResuelta.ToUpper() == "NOTARIAS" || notariaResuelta.ToUpper() == "GENERAL")
+                    {
+                        string? extraida = ExtraerNotaria(rutaCompleta) ?? ExtraerNotaria(detalles);
+                        if (!string.IsNullOrEmpty(extraida))
+                        {
+                            notariaResuelta = extraida;
+                        }
+                    }
+
                     var nuevoRegistro = new RegistroAuditoria
                     {
                         FechaHora = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
@@ -234,7 +264,7 @@ namespace CapturaNotarias
                         Turno = ModuloConfiguracion.TurnoActual,
                         PC = pcNombre,
                         IP = localIp,
-                        Notaria = notaria,
+                        Notaria = notariaResuelta,
                         Accion = "Capturado",
                         ArchivoOriginal = archivo,
                         Detalles = detalles,
@@ -644,11 +674,24 @@ namespace CapturaNotarias
                                             json = sr.ReadToEnd();
                                         }
                                         var obj = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(json);
+                                        string? lugarArchivo = obj?.Registros?.FirstOrDefault(r => !string.IsNullOrEmpty(r.LugarTrabajo))?.LugarTrabajo;
                                         if (obj != null && obj.Registros != null)
                                         {
                                             foreach (var reg in obj.Registros.Where(r => r.Enviado != true))
                                             {
                                                 reg.RutaJsonOrigen = rutaJson;
+                                                 if (string.IsNullOrEmpty(reg.LugarTrabajo))
+                                                 {
+                                                     reg.LugarTrabajo = lugarArchivo;
+                                                 }
+                                                 if (string.IsNullOrEmpty(reg.Notaria) || reg.Notaria.ToUpper() == "NOTARIAS" || reg.Notaria.ToUpper() == "GENERAL")
+                                                 {
+                                                     string? extraida = ExtraerNotaria(reg.RutaLocal) ?? ExtraerNotaria(reg.Detalles);
+                                                     if (!string.IsNullOrEmpty(extraida))
+                                                     {
+                                                         reg.Notaria = extraida;
+                                                     }
+                                                 }
                                                 result.Add(reg);
                                             }
                                         }
@@ -679,6 +722,11 @@ namespace CapturaNotarias
                                 jsonLocal = sr.ReadToEnd();
                             }
                             var objLocal = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(jsonLocal);
+                             string? lugarArchivoLocal = objLocal?.Registros?.FirstOrDefault(r => !string.IsNullOrEmpty(r.LugarTrabajo))?.LugarTrabajo;
+                             if (string.IsNullOrEmpty(lugarArchivoLocal))
+                             {
+                                 lugarArchivoLocal = ModuloConfiguracion.LugarTrabajo;
+                             }
                             if (objLocal != null && objLocal.Registros != null)
                             {
                                 foreach (var regLocal in objLocal.Registros.Where(r => r.Enviado != true))
@@ -692,6 +740,18 @@ namespace CapturaNotarias
                                     if (!yaExiste)
                                     {
                                         regLocal.RutaJsonOrigen = rutaJsonLocal;
+                                         if (string.IsNullOrEmpty(regLocal.LugarTrabajo))
+                                         {
+                                             regLocal.LugarTrabajo = lugarArchivoLocal;
+                                         }
+                                         if (string.IsNullOrEmpty(regLocal.Notaria) || regLocal.Notaria.ToUpper() == "NOTARIAS" || regLocal.Notaria.ToUpper() == "GENERAL")
+                                         {
+                                             string? extraida = ExtraerNotaria(regLocal.RutaLocal) ?? ExtraerNotaria(regLocal.Detalles);
+                                             if (!string.IsNullOrEmpty(extraida))
+                                             {
+                                                 regLocal.Notaria = extraida;
+                                             }
+                                         }
                                         result.Add(regLocal);
                                     }
                                 }
@@ -738,7 +798,23 @@ namespace CapturaNotarias
                                         var obj = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(json);
                                         if (obj != null && obj.Registros != null)
                                         {
-                                            todos.AddRange(obj.Registros);
+                                            string? lugarArchivo = obj.Registros.FirstOrDefault(r => !string.IsNullOrEmpty(r.LugarTrabajo))?.LugarTrabajo;
+                                             foreach (var reg in obj.Registros)
+                                             {
+                                                 if (string.IsNullOrEmpty(reg.LugarTrabajo))
+                                                 {
+                                                     reg.LugarTrabajo = lugarArchivo;
+                                                 }
+                                                 if (string.IsNullOrEmpty(reg.Notaria) || reg.Notaria.ToUpper() == "NOTARIAS" || reg.Notaria.ToUpper() == "GENERAL")
+                                                 {
+                                                     string? extraida = ExtraerNotaria(reg.RutaLocal) ?? ExtraerNotaria(reg.Detalles);
+                                                     if (!string.IsNullOrEmpty(extraida))
+                                                     {
+                                                         reg.Notaria = extraida;
+                                                     }
+                                                 }
+                                             }
+                                             todos.AddRange(obj.Registros);
                                             cargadoDesdeServidor = true;
                                         }
                                     }
@@ -765,6 +841,29 @@ namespace CapturaNotarias
                                 jsonLocal = sr.ReadToEnd();
                             }
                             var objLocal = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(jsonLocal);
+                            if (objLocal != null && objLocal.Registros != null)
+                            {
+                                string? lugarArchivoLocal = objLocal.Registros.FirstOrDefault(r => !string.IsNullOrEmpty(r.LugarTrabajo))?.LugarTrabajo;
+                                if (string.IsNullOrEmpty(lugarArchivoLocal))
+                                {
+                                    lugarArchivoLocal = ModuloConfiguracion.LugarTrabajo;
+                                }
+                                foreach (var regLocal in objLocal.Registros)
+                                {
+                                    if (string.IsNullOrEmpty(regLocal.LugarTrabajo))
+                                    {
+                                        regLocal.LugarTrabajo = lugarArchivoLocal;
+                                    }
+                                    if (string.IsNullOrEmpty(regLocal.Notaria) || regLocal.Notaria.ToUpper() == "NOTARIAS" || regLocal.Notaria.ToUpper() == "GENERAL")
+                                    {
+                                        string? extraida = ExtraerNotaria(regLocal.RutaLocal) ?? ExtraerNotaria(regLocal.Detalles);
+                                        if (!string.IsNullOrEmpty(extraida))
+                                        {
+                                            regLocal.Notaria = extraida;
+                                        }
+                                    }
+                                }
+                            }
                             if (objLocal != null && objLocal.Registros != null)
                             {
                                 if (!cargadoDesdeServidor)
@@ -1249,6 +1348,11 @@ namespace CapturaNotarias
                         var obj = JsonConvert.DeserializeObject<ArchivoAuditoriaJson>(json);
                         if (obj != null && obj.Registros != null)
                         {
+                            string? lugarArchivo = obj.Registros.FirstOrDefault(r => !string.IsNullOrEmpty(r.LugarTrabajo))?.LugarTrabajo;
+                            if (string.IsNullOrEmpty(lugarArchivo) && (ruta == rutaLocalJson || (Path.GetFileName(Path.GetDirectoryName(ruta)) ?? "").Equals(ModuloConfiguracion.NombrePC, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                lugarArchivo = ModuloConfiguracion.LugarTrabajo;
+                            }
                             registrosDeArchivos[ruta] = obj;
                             foreach (var reg in obj.Registros)
                             {
@@ -1264,6 +1368,18 @@ namespace CapturaNotarias
 
                                 if (!yaAgregado && reg.Enviado != true)
                                 {
+                                    if (string.IsNullOrEmpty(reg.LugarTrabajo))
+                                    {
+                                        reg.LugarTrabajo = lugarArchivo;
+                                    }
+                                    if (string.IsNullOrEmpty(reg.Notaria) || reg.Notaria.ToUpper() == "NOTARIAS" || reg.Notaria.ToUpper() == "GENERAL")
+                                    {
+                                        string? extraida = ExtraerNotaria(reg.RutaLocal) ?? ExtraerNotaria(reg.Detalles);
+                                        if (!string.IsNullOrEmpty(extraida))
+                                        {
+                                            reg.Notaria = extraida;
+                                        }
+                                    }
                                     registrosPendientes.Add(reg);
                                 }
                             }
@@ -1374,12 +1490,12 @@ namespace CapturaNotarias
                     }
 
                     // El servidor de destino central real (VPN) para guardar los PDFs
-                    string baseServidor = @"\\172.40.5.84\ssdirec\NOTARIAS";
+                    string baseServidor = Path.Combine(@"\\172.40.5.84\ssdirec", ModuloConfiguracion.TipoCaptura);
 
                     // El servidor local del escáner (de donde obtenemos los archivos originales)
                     string rutaAuditoriaLocal = !string.IsNullOrEmpty(ModuloConfiguracion.RutaServidorAuditoria)
                         ? ModuloConfiguracion.RutaServidorAuditoria
-                        : @"\\192.168.1.10\NOTARIAS";
+                        : @"\\192.168.1.10\" + ModuloConfiguracion.TipoCaptura;
 
                     // Construir el destino final limpio conservando la estructura de carpetas (ej. NOTARIA 53\VOLUMEN 24)
                     string destinoArchivo = "";
@@ -1548,10 +1664,10 @@ namespace CapturaNotarias
                                     rutaLoc = Path.Combine(ultimaRuta, primerLog.ArchivoOriginal ?? "");
                                 }
 
-                                string baseServ = @"\\172.40.5.84\ssdirec\NOTARIAS";
+                                string baseServ = Path.Combine(@"\\172.40.5.84\ssdirec", ModuloConfiguracion.TipoCaptura);
                                 string rutaAudLoc = !string.IsNullOrEmpty(ModuloConfiguracion.RutaServidorAuditoria)
                                     ? ModuloConfiguracion.RutaServidorAuditoria
-                                    : @"\\192.168.1.10\NOTARIAS";
+                                    : @"\\192.168.1.10\" + ModuloConfiguracion.TipoCaptura;
 
                                 // Destino
                                 string destArch = "";
@@ -1711,6 +1827,14 @@ namespace CapturaNotarias
                                             if (reg != null)
                                             {
                                                 reg.Enviado = true;
+                                                if (string.IsNullOrEmpty(reg.LugarTrabajo) && !string.IsNullOrEmpty(logEnviado.LugarTrabajo))
+                                                {
+                                                    reg.LugarTrabajo = logEnviado.LugarTrabajo;
+                                                }
+                                                if ((string.IsNullOrEmpty(reg.Notaria) || reg.Notaria.ToUpper() == "NOTARIAS" || reg.Notaria.ToUpper() == "GENERAL") && !string.IsNullOrEmpty(logEnviado.Notaria))
+                                                {
+                                                    reg.Notaria = logEnviado.Notaria;
+                                                }
                                             }
                                         }
 
@@ -1750,7 +1874,7 @@ namespace CapturaNotarias
                     // Escribir JSON consolidado en ssdirec para SyncAuditorias.php (L42)
                     try
                     {
-                        string rutaJsonCentral = @"\\172.40.5.84\ssdirec\NOTARIAS\auditoria.json";
+                        string rutaJsonCentral = Path.Combine(@"\\172.40.5.84\ssdirec", ModuloConfiguracion.TipoCaptura, "auditoria.json");
                         string? directorioCentral = Path.GetDirectoryName(rutaJsonCentral);
                         if (!string.IsNullOrEmpty(directorioCentral) && ExisteDirectorioConTimeout(directorioCentral, 1500))
                         {
@@ -1860,6 +1984,67 @@ public static List<DiagnosticoPC> ObtenerDiagnosticoPCs()
             lista.Add(diagLocal);
 
             return lista;
+        }
+
+        private static string? ExtraerNotaria(string? texto)
+        {
+            if (string.IsNullOrEmpty(texto)) return null;
+
+            string ruta = texto;
+            // Buscar si contiene una estructura de ruta (unidad de disco o UNC)
+            var coincidenciaRuta = System.Text.RegularExpressions.Regex.Match(texto, @"([a-zA-Z]:\\|\\\\)");
+            if (coincidenciaRuta.Success)
+            {
+                int indice = coincidenciaRuta.Index;
+                if (coincidenciaRuta.Value.Contains(":\\"))
+                {
+                    ruta = texto.Substring(indice - 1);
+                }
+                else
+                {
+                    ruta = texto.Substring(indice);
+                }
+            }
+
+            // Separar la ruta en partes por carpetas
+            string[] segmentos = ruta.Split(new char[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+            int indiceNotaria = -1;
+            for (int i = 0; i < segmentos.Length; i++)
+            {
+                string segUpper = segmentos[i].ToUpper();
+                if (segUpper.Contains("NOTARIA") && segUpper != "NOTARIAS")
+                {
+                    indiceNotaria = i;
+                    break;
+                }
+            }
+
+            if (indiceNotaria != -1)
+            {
+                int fin = segmentos.Length;
+                string ultimo = segmentos[segmentos.Length - 1];
+                if (ultimo.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+                {
+                    fin--;
+                }
+
+                int cantidad = fin - indiceNotaria;
+                if (cantidad > 0)
+                {
+                    var partes = new string[cantidad];
+                    Array.Copy(segmentos, indiceNotaria, partes, 0, cantidad);
+                    return string.Join("\\", partes);
+                }
+            }
+
+            // Fallback: buscar un patrón simple de "NOTARIA <número>"
+            var coincidenciaAlternativa = System.Text.RegularExpressions.Regex.Match(texto, @"NOTARIA\s*\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (coincidenciaAlternativa.Success)
+            {
+                return coincidenciaAlternativa.Value.ToUpper();
+            }
+
+            return null;
         }
     }
 

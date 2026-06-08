@@ -6,12 +6,28 @@ namespace CapturaNotarias
 {
     public class ConfiguracionApp
     {
-        public string? RutaServidorAuditoria { get; set; } = @"\\192.168.1.10\NOTARIAS";
+        private string? _rutaServidorAuditoria;
+        public string? RutaServidorAuditoria
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(_rutaServidorAuditoria))
+                {
+                    return @"\\192.168.1.10\" + (TipoCaptura ?? "NOTARIAS");
+                }
+                return _rutaServidorAuditoria;
+            }
+            set
+            {
+                _rutaServidorAuditoria = value;
+            }
+        }
         public string? UltimaRutaVigilada { get; set; }
         public string? NombrePC { get; set; }
         public string? LugarTrabajo { get; set; }
         public string? UrlApi { get; set; } = "https://app.astronmx.cloud/api/digitalizacion/registrar";
         public bool ActivarEnvioAuditoria { get; set; } = false;
+        public string? TipoCaptura { get; set; } = "NOTARIAS";
     }
 
     public static class ModuloConfiguracion
@@ -19,9 +35,25 @@ namespace CapturaNotarias
         public static string UsuarioActual = "";
         public static string NombreCompletoActual = "";
         public static string TurnoActual = "";
+        public static string TipoCaptura = "NOTARIAS";
         
         // El servidor donde caen los logs de auditoría general
-        public static string RutaServidorAuditoria = @"\\192.168.1.10\NOTARIAS"; 
+        private static string? _rutaServidorAuditoria;
+        public static string RutaServidorAuditoria
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(_rutaServidorAuditoria))
+                {
+                    return @"\\192.168.1.10\" + TipoCaptura;
+                }
+                return _rutaServidorAuditoria;
+            }
+            set
+            {
+                _rutaServidorAuditoria = value;
+            }
+        }
         public static string NombrePC = "";
         public static string LugarTrabajo = "";
         public static string UrlApi = "https://app.astronmx.cloud/api/digitalizacion/registrar";
@@ -48,6 +80,15 @@ namespace CapturaNotarias
                     string json = File.ReadAllText(archivo);
                     var config = JsonConvert.DeserializeObject<ConfiguracionApp>(json) ?? new ConfiguracionApp();
                     
+                    if (!string.IsNullOrEmpty(config.TipoCaptura))
+                    {
+                        TipoCaptura = config.TipoCaptura;
+                    }
+                    else
+                    {
+                        TipoCaptura = "NOTARIAS";
+                    }
+
                     if (!string.IsNullOrEmpty(config.RutaServidorAuditoria))
                         RutaServidorAuditoria = config.RutaServidorAuditoria;
                     
@@ -94,6 +135,9 @@ namespace CapturaNotarias
         {
             try
             {
+                if (!string.IsNullOrEmpty(config.TipoCaptura))
+                    TipoCaptura = config.TipoCaptura;
+
                 if (!string.IsNullOrEmpty(config.RutaServidorAuditoria))
                     RutaServidorAuditoria = config.RutaServidorAuditoria;
                 

@@ -14,6 +14,7 @@ namespace CapturaNotarias
         private Button btnCambiarRuta = null!;
         private Button btnCerrarSesion = null!;
         private Button btnReconteo = null!;
+        private Button btnEscanearCarpeta = null!;
         private FileSystemWatcher? watcher;
         private int contadorSesion = 0;
         private ConfiguracionApp configLocal;
@@ -55,11 +56,13 @@ namespace CapturaNotarias
 
             btnCambiarRuta = new Button() { Text = "📂 Elegir Carpeta", Location = new Point(20, 145), Size = new Size(170, 38), FlatStyle = FlatStyle.Flat, Font = new Font("Arial", 10.5F) };
             btnCerrarSesion = new Button() { Text = "Cerrar Sesión", Location = new Point(210, 145), Size = new Size(170, 38), FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Color.Firebrick, Font = new Font("Arial", 10.5F) };
-            btnReconteo = new Button() { Text = "🔄 Reconteo de Páginas", Location = new Point(20, 195), Size = new Size(360, 38), FlatStyle = FlatStyle.Flat, BackColor = Color.SteelBlue, ForeColor = Color.White, Font = new Font("Arial", 10.5F) };
+            btnReconteo = new Button() { Text = "🔄 Reconteo Páginas", Location = new Point(20, 195), Size = new Size(170, 38), FlatStyle = FlatStyle.Flat, BackColor = Color.SteelBlue, ForeColor = Color.White, Font = new Font("Arial", 10.5F) };
+            btnEscanearCarpeta = new Button() { Text = "🔎 Escanear Carpeta", Location = new Point(210, 195), Size = new Size(170, 38), FlatStyle = FlatStyle.Flat, BackColor = Color.DarkSlateGray, ForeColor = Color.White, Font = new Font("Arial", 10.5F) };
 
             btnCambiarRuta.Click += BtnCambiarRuta_Click;
             btnCerrarSesion.Click += BtnCerrarSesion_Click;
             btnReconteo.Click += BtnReconteo_Click;
+            btnEscanearCarpeta.Click += BtnEscanearCarpeta_Click;
 
             this.Controls.Add(lblUsuario);
             this.Controls.Add(lblRuta);
@@ -67,6 +70,91 @@ namespace CapturaNotarias
             this.Controls.Add(btnCambiarRuta);
             this.Controls.Add(btnCerrarSesion);
             this.Controls.Add(btnReconteo);
+            this.Controls.Add(btnEscanearCarpeta);
+        }
+
+
+        private void BtnEscanearCarpeta_Click(object? sender, EventArgs e)
+        {
+            string? rutaVigilada = configLocal.UltimaRutaVigilada;
+            if (string.IsNullOrEmpty(rutaVigilada) || !Directory.Exists(rutaVigilada))
+            {
+                MessageBox.Show("No se ha seleccionado una carpeta de trabajo válida.", "Carpeta no válida", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // Solicitar PIN Maestro
+            string pinMaestroCorrecto = ObtenerPinMaestro();
+            using (Form prompt = new Form() { Width = 300, Height = 150, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Acceso Autorizado", StartPosition = FormStartPosition.CenterScreen })
+            {
+                Label textLabel = new Label() { Left = 20, Top = 10, Width = 250, Text = "Ingrese el PIN Maestro:" };
+                TextBox textBox = new TextBox() { Left = 20, Top = 35, Width = 240, PasswordChar = '*', MaxLength = 8 };
+                Button confirmation = new Button() { Text = "Aceptar", Left = 160, Width = 100, Top = 70, DialogResult = DialogResult.OK };
+                prompt.Controls.Add(textLabel);
+                prompt.Controls.Add(textBox);
+                prompt.Controls.Add(confirmation);
+                prompt.AcceptButton = confirmation;
+
+                if (prompt.ShowDialog() != DialogResult.OK || textBox.Text != pinMaestroCorrecto)
+                {
+                    MessageBox.Show("PIN Maestro incorrecto o cancelado.", "Acceso Denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+            }
+
+            btnEscanearCarpeta.Enabled = false;
+            btnEscanearCarpeta.Text = "⏳ Escaneando...";
+            this.Refresh();
+
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                int nuevos = 0;
+                int duplicados = 0;
+                int errores = 0;
+
+                try
+                {
+                    string[] archivos = Directory.GetFiles(rutaVigilada, "*.pdf", SearchOption.AllDirectories);
+                    foreach (var archivoPath in archivos)
+                    {
+                        string nombreArchivo = Path.GetFileName(archivoPath);
+                        // RegistrarAccion valida internamente duplicados para el mismo día y PC
+                        string resultado = ModuloAuditoria.RegistrarAccion(notariaActual, nombreArchivo, archivoPath, "PDF Escaneado en " + archivoPath);
+                        if (resultado == "OK")
+                        {
+                            nuevos++;
+                        }
+                        else if (resultado == "DUPLICATE")
+                        {
+                            duplicados++;
+                        }
+                        else
+                        {
+                            errores++;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    this.Invoke((MethodInvoker)delegate
+                    {
+                        MessageBox.Show("Error al escanear la carpeta: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    });
+                }
+
+                this.Invoke((MethodInvoker)delegate
+                {
+                    btnEscanearCarpeta.Enabled = true;
+                    btnEscanearCarpeta.Text = "🔎 Escanear Carpeta";
+                    CargarContadorDelDia();
+
+                    MessageBox.Show(
+                        string.Format("Escaneo completado.\n\n• Nuevos registrados: {0}\n• Ya registrados (omitidos): {1}\n• Errores: {2}", nuevos, duplicados, errores),
+                        "Proceso Terminado",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                });
+            });
         }
 
         private void BtnCambiarRuta_Click(object? sender, EventArgs e)
@@ -266,6 +354,30 @@ namespace CapturaNotarias
                 }
                 catch { }
             });
+        }
+
+        private string ObtenerPinMaestro()
+        {
+            string pinMaestroCorrecto = "2003";
+            try
+            {
+                string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
+                if (File.Exists(rutaUsuarios))
+                {
+                    string json = File.ReadAllText(rutaUsuarios);
+                    var obj = Newtonsoft.Json.Linq.JObject.Parse(json);
+                    if (obj != null && obj["PinMaestro"] != null)
+                    {
+                        string? pin = obj["PinMaestro"]?.ToString();
+                        if (!string.IsNullOrEmpty(pin))
+                        {
+                            pinMaestroCorrecto = pin;
+                        }
+                    }
+                }
+            }
+            catch { }
+            return pinMaestroCorrecto;
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
