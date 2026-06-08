@@ -15,6 +15,20 @@ namespace CapturaNotarias
             // Cargar configuración local al arrancar
             ConfiguracionApp config = ModuloConfiguracion.CargarConfiguracion();
 
+            // Si no se ha asignado tipo de captura a esta PC, abrir el formulario para pedirlo
+            if (string.IsNullOrEmpty(config.TipoCaptura))
+            {
+                using (FormTipoCaptura frm = new FormTipoCaptura())
+                {
+                    if (frm.ShowDialog() != DialogResult.OK)
+                    {
+                        return; // Salir del programa si no seleccionó el tipo de captura
+                    }
+                }
+                // Recargar configuración tras guardar el tipo de captura
+                config = ModuloConfiguracion.CargarConfiguracion();
+            }
+
             // Si no se ha asignado número a esta PC, abrir el formulario para pedirlo
             if (string.IsNullOrEmpty(config.NombrePC))
             {
