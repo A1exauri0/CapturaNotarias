@@ -4,6 +4,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$codigo = Get-Content '%
 exit /b
 
 # Codigo de PowerShell en adelante
+# Filtro opcional de Notaría (ej: "NOTARIA 26"). Déjalo vacío "" si deseas procesar todas las notarías.
+$filtroNotaria = "NOTARIA 26"
+
+# Funcion auxiliar para leer archivos de texto de forma segura sin bloqueos y compatible con todas las versiones de PS
+function LeerArchivoTexto($ruta) {
+    $stream = New-Object System.IO.FileStream($ruta, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+    $texto = $reader.ReadToEnd()
+    $reader.Close()
+    $stream.Close()
+    return $texto
+}
+
 $rutaConfig = "$env:APPDATA\CapturaNotarias\config.json"
 if (-not (Test-Path $rutaConfig)) {
     Write-Host "[ERROR] No se encontro el archivo de configuracion local en $rutaConfig." -ForegroundColor Red
@@ -14,7 +27,7 @@ if (-not (Test-Path $rutaConfig)) {
 
 # Cargar configuracion
 try {
-    $configContent = Get-Content $rutaConfig -Raw
+    $configContent = LeerArchivoTexto $rutaConfig
     $config = ConvertFrom-Json $configContent
 } catch {
     Write-Host "[ERROR] No se pudo leer el archivo de configuracion: $_" -ForegroundColor Red
@@ -36,6 +49,9 @@ Write-Host "PC: $nombrePC"
 Write-Host "Lugar de Trabajo: $lugarTrabajo"
 Write-Host "Tipo de Captura: $tipoCaptura"
 Write-Host "API Destino: $urlApi"
+if (-not [string]::IsNullOrEmpty($filtroNotaria)) {
+    Write-Host "FILTRANDO SOLO: $filtroNotaria" -ForegroundColor Yellow
+}
 Write-Host "==================================================" -ForegroundColor Cyan
 
 # Solicitar disco de destino
@@ -62,13 +78,6 @@ if ($resultado -ne [System.Windows.Forms.DialogResult]::OK -or [string]::IsNullO
 $rutaDestino = $dialogo.SelectedPath
 Write-Host "Ruta seleccionada: $rutaDestino" -ForegroundColor Green
 
-
-
-
-
-
-
-
 if (-not (Test-Path $rutaDestino)) {
     try {
         New-Item -ItemType Directory -Force -Path $rutaDestino | Out-Null
@@ -83,17 +92,12 @@ if (-not (Test-Path $rutaDestino)) {
 
 # Localizar los archivos JSON de auditoria
 $rutaLocalJson = "$env:APPDATA\CapturaNotarias\auditoria_local.json"
-$rutaServerJson = ""
-
-if (-not [string]::IsNullOrEmpty($rutaServidorAuditoria) -and (Test-Path $rutaServidorAuditoria)) {
-    $rutaServerJson = Join-Path $rutaServidorAuditoria "MonitoreoCaptura\$nombrePC\auditoria.json"
-}
 
 # Funcion para obtener registros
 function ObtenerRegistros($rutaJson) {
     if (Test-Path $rutaJson) {
         try {
-            $contenido = Get-Content $rutaJson -Raw -ErrorAction Stop
+            $contenido = LeerArchivoTexto $rutaJson
             if (-not [string]::IsNullOrWhiteSpace($contenido)) {
                 $objeto = ConvertFrom-Json $contenido
                 if ($objeto -and $objeto.Registros) {
@@ -108,6 +112,7 @@ function ObtenerRegistros($rutaJson) {
 }
 
 $todosLosLogs = [System.Collections.Generic.List[PSObject]]::new()
+$seenKeys = @{}
 
 # Cargar del local
 $logsLocales = ObtenerRegistros $rutaLocalJson
@@ -115,34 +120,51 @@ foreach ($l in $logsLocales) {
     if ($l.FechaHora -and $l.ArchivoOriginal) {
         $l | Add-Member -MemberType NoteProperty -Name "OrigenFile" -Value $rutaLocalJson -Force
         $todosLosLogs.Add($l)
+        
+        $key = "$($l.FechaHora)_$($l.ArchivoOriginal)_$($l.PC)"
+        $seenKeys[$key] = $true
     }
 }
 
-# Cargar del servidor de red (si esta disponible)
-if (-not [string]::IsNullOrEmpty($rutaServerJson) -and (Test-Path $rutaServerJson)) {
-    $logsServidor = ObtenerRegistros $rutaServerJson
-    foreach ($l in $logsServidor) {
-        if ($l.FechaHora -and $l.ArchivoOriginal) {
-            $l | Add-Member -MemberType NoteProperty -Name "OrigenFile" -Value $rutaServerJson -Force
-            
-            # Evitar duplicados basados en FechaHora, ArchivoOriginal y PC
-            $existe = $todosLosLogs | Where-Object { 
-                $_.FechaHora -eq $l.FechaHora -and 
-                $_.ArchivoOriginal -eq $l.ArchivoOriginal -and 
-                $_.PC -eq $l.PC 
-            }
-            if (-not $existe) {
-                $todosLosLogs.Add($l)
+# Cargar de todas las PCs registradas en el servidor de red (MonitoreoCaptura)
+if (-not [string]::IsNullOrEmpty($rutaServidorAuditoria) -and (Test-Path $rutaServidorAuditoria)) {
+    # Buscar carpetas MonitoreoCaptura de forma dirigida para evitar escaneos lentos de red
+    $rutasMonitoreo = @()
+    $path1 = Join-Path $rutaServidorAuditoria "MonitoreoCaptura"
+    if (Test-Path $path1) { $rutasMonitoreo += $path1 }
+    $path2 = Join-Path $rutaServidorAuditoria (Join-Path $tipoCaptura "MonitoreoCaptura")
+    if (Test-Path $path2) { $rutasMonitoreo += $path2 }
+    $path3 = Join-Path $rutaServidorAuditoria (Join-Path "NOTARIAS" "MonitoreoCaptura")
+    if (Test-Path $path3) { $rutasMonitoreo += $path3 }
+
+    foreach ($rutaM in $rutasMonitoreo | Select-Object -Unique) {
+        $archivosJson = Get-ChildItem -Path $rutaM -Filter "auditoria*.json" -Recurse -File -ErrorAction SilentlyContinue
+        foreach ($archivo in $archivosJson) {
+            $rutaJson = $archivo.FullName
+            $logsServidor = ObtenerRegistros $rutaJson
+            foreach ($l in $logsServidor) {
+                if ($l.FechaHora -and $l.ArchivoOriginal) {
+                    $key = "$($l.FechaHora)_$($l.ArchivoOriginal)_$($l.PC)"
+                    if (-not $seenKeys.ContainsKey($key)) {
+                        $l | Add-Member -MemberType NoteProperty -Name "OrigenFile" -Value $rutaJson -Force
+                        $todosLosLogs.Add($l)
+                        $seenKeys[$key] = $true
+                    }
+                }
             }
         }
     }
 }
 
-# Filtrar solo pendientes de enviar
-$logsPendientes = $todosLosLogs | Where-Object { $_.Enviado -ne $true -and $_.Enviado -ne "true" }
+# Filtrar solo pendientes de enviar (y opcionalmente por Notaría)
+$logsPendientes = $todosLosLogs | Where-Object { 
+    $_.Enviado -ne $true -and 
+    $_.Enviado -ne "true" -and 
+    ([string]::IsNullOrEmpty($filtroNotaria) -or $_.Notaria -like "*$filtroNotaria*")
+}
 
 if ($logsPendientes.Count -eq 0) {
-    Write-Host "No se encontraron registros de auditoria pendientes para esta PC." -ForegroundColor Green
+    Write-Host "No se encontraron registros de auditoria pendientes." -ForegroundColor Green
     Write-Host "Presione cualquier tecla para salir..."
     $null = [Console]::ReadKey()
     exit
@@ -172,7 +194,8 @@ foreach ($grupo in $logsAgrupados) {
         $candidatos = @(
             $rutaArchivoOriginal,
             (Join-Path "C:\$tipoCaptura" (Join-Path $log.Notaria $log.ArchivoOriginal)),
-            (Join-Path "C:\NOTARIAS" (Join-Path $log.Notaria $log.ArchivoOriginal))
+            (Join-Path "C:\NOTARIAS" (Join-Path $log.Notaria $log.ArchivoOriginal)),
+            (Join-Path "C:\NOTARIAS\NOTARIAS" (Join-Path $log.Notaria $log.ArchivoOriginal))
         )
 
         foreach ($c in $candidatos) {
@@ -184,7 +207,10 @@ foreach ($grupo in $logsAgrupados) {
         }
 
         if (-not $archivoExiste) {
-            Write-Host "  [Omitido] No se encontro archivo fisico local para: $($log.ArchivoOriginal)" -ForegroundColor DarkGray
+            Write-Host "  [Sin PDF local] No se encontro PDF para $($log.ArchivoOriginal), pero se enviara el registro." -ForegroundColor Yellow
+            $log.Enviado = $true
+            $log | Add-Member -MemberType NoteProperty -Name "RutaFisicaABorrar" -Value "" -Force
+            $logsExitososEnVolumen.Add($log)
             continue
         }
 
@@ -277,9 +303,9 @@ foreach ($grupo in $logsAgrupados) {
         $gruposOrigen = $logsExitososEnVolumen | Group-Object -Property OrigenFile
         foreach ($go in $gruposOrigen) {
             $rutaJsonDest = $go.Name
-            if (Test-Path $rutaJsonDest) {
+            if (-not [string]::IsNullOrEmpty($rutaJsonDest) -and (Test-Path $rutaJsonDest)) {
                 try {
-                    $contenidoJson = Get-Content $rutaJsonDest -Raw
+                    $contenidoJson = LeerArchivoTexto $rutaJsonDest
                     $datosAuditoria = ConvertFrom-Json $contenidoJson
                     if ($datosAuditoria -and $datosAuditoria.Registros) {
                         foreach ($logEx in $go.Group) {
@@ -305,7 +331,7 @@ foreach ($grupo in $logsAgrupados) {
 
         # Eliminar archivos fisicos locales
         foreach ($log in $logsExitososEnVolumen) {
-            if (Test-Path $log.RutaFisicaABorrar) {
+            if (-not [string]::IsNullOrEmpty($log.RutaFisicaABorrar) -and (Test-Path $log.RutaFisicaABorrar)) {
                 try {
                     Remove-Item -Path $log.RutaFisicaABorrar -Force -ErrorAction Stop
                     Write-Host "  [Eliminado local] $($log.ArchivoOriginal)" -ForegroundColor Gray
