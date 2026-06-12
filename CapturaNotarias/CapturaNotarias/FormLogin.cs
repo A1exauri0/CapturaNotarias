@@ -15,6 +15,7 @@ namespace CapturaNotarias
         private Button btnConfig;
         private ContextMenuStrip menuConfig;
         private Label lblAdvertencia = null!;
+        private Label lblEstadoConexion = null!;
 
         public FormLogin()
         {
@@ -48,24 +49,24 @@ namespace CapturaNotarias
             ToolStripMenuItem itemAdminUsuarios = new ToolStripMenuItem("👥 Administrar Usuarios...");
             ToolStripMenuItem itemAuditoria = new ToolStripMenuItem("📊 Ver Productividad y Auditoría...");
             ToolStripMenuItem itemExcel = new ToolStripMenuItem("📊 Descargar Reporte Excel...");
-            ToolStripMenuItem itemEnviarArchivos = new ToolStripMenuItem("📤 Enviar Auditorías  y Archivos a Servidor Central...");
-            ToolStripMenuItem itemDiagnostico = new ToolStripMenuItem("🔍 Diagnóstico de Conexión de PCs...");
+            ToolStripMenuItem itemEnviarRegistros = new ToolStripMenuItem("🌐 Enviar Registros de Auditoría a Astronmx...");
+            ToolStripMenuItem itemEnviarPDFs = new ToolStripMenuItem("📁 Transferir Archivos PDF al Servidor Central...");
             ToolStripMenuItem itemLugarTrabajo = new ToolStripMenuItem("📍 Cambiar Lugar de Trabajo...");
             
             itemConfigServidor.Click += BtnConfig_Click;
             itemAdminUsuarios.Click += BtnUsuarios_Click;
             itemAuditoria.Click += BtnAuditoria_Click;
             itemExcel.Click += ItemExcel_Click;
-            itemEnviarArchivos.Click += ItemEnviarArchivos_Click;
-            itemDiagnostico.Click += ItemDiagnostico_Click;
+            itemEnviarRegistros.Click += ItemEnviarRegistros_Click;
+            itemEnviarPDFs.Click += ItemEnviarPDFs_Click;
             itemLugarTrabajo.Click += ItemLugarTrabajo_Click;
             
             menuConfig.Items.Add(itemConfigServidor);
             menuConfig.Items.Add(itemAdminUsuarios);
             menuConfig.Items.Add(itemAuditoria);
             menuConfig.Items.Add(itemExcel);
-            menuConfig.Items.Add(itemEnviarArchivos);
-            menuConfig.Items.Add(itemDiagnostico);
+            menuConfig.Items.Add(itemEnviarRegistros);
+            menuConfig.Items.Add(itemEnviarPDFs);
             menuConfig.Items.Add(itemLugarTrabajo);
 
             btnConfig.Click += (s, e) => {
@@ -84,6 +85,16 @@ namespace CapturaNotarias
                 Visible = ModuloConfiguracion.ActivarEnvioAuditoria
             };
 
+            // Indicador de conexión
+            lblEstadoConexion = new Label()
+            {
+                Text = ModuloConfiguracion.EsServidor ? "● Servidor Local" : "● Verificando...",
+                ForeColor = ModuloConfiguracion.EsServidor ? Color.RoyalBlue : Color.Gray,
+                AutoSize = true,
+                Location = new Point(160, 242),
+                Font = new Font("Arial", 9F, FontStyle.Bold)
+            };
+
             this.Controls.Add(lblTitle);
             this.Controls.Add(lblUser);
             this.Controls.Add(txtUsername);
@@ -92,8 +103,51 @@ namespace CapturaNotarias
             this.Controls.Add(btnLogin);
             this.Controls.Add(btnConfig);
             this.Controls.Add(lblAdvertencia);
+            this.Controls.Add(lblEstadoConexion);
             
             this.AcceptButton = btnLogin;
+        }
+
+        private void ActualizarEstadoConexion(bool conectado)
+        {
+            if (ModuloConfiguracion.EsServidor) return;
+
+            try
+            {
+                if (lblEstadoConexion.InvokeRequired)
+                {
+                    lblEstadoConexion.Invoke(new Action(() => ActualizarEstadoConexion(conectado)));
+                    return;
+                }
+
+                if (conectado)
+                {
+                    lblEstadoConexion.Text = "● Online";
+                    lblEstadoConexion.ForeColor = Color.MediumSeaGreen;
+                }
+                else
+                {
+                    lblEstadoConexion.Text = "● Offline";
+                    lblEstadoConexion.ForeColor = Color.Crimson;
+                }
+            }
+            catch { }
+        }
+
+        private void VerificarConexionLocal()
+        {
+            if (ModuloConfiguracion.EsServidor)
+            {
+                lblEstadoConexion.Text = "● Servidor Local";
+                lblEstadoConexion.ForeColor = Color.RoyalBlue;
+                return;
+            }
+
+            System.Threading.Tasks.Task.Run(async () =>
+            {
+                bool conectado = await ClienteHttpLocal.PingAsync();
+                ActualizarEstadoConexion(conectado);
+            });
         }
 
         private bool ExisteDirectorioConTimeout(string ruta, int timeoutMs)
@@ -371,9 +425,9 @@ namespace CapturaNotarias
             }
         }
 
-        private void ItemEnviarArchivos_Click(object? sender, EventArgs e)
+        private void ItemEnviarRegistros_Click(object? sender, EventArgs e)
         {
-            // Solicitar el PIN maestro al usuario para autorizar la transferencia
+            // Solicitar el PIN maestro al usuario para autorizar el envío de registros
             InicializarUsuariosJson();
 
             string pinMaestroCorrecto = "2003";
@@ -406,7 +460,7 @@ namespace CapturaNotarias
             {
                 if (cajaTexto.Text == pinMaestroCorrecto)
                 {
-                    ModuloAuditoria.EnviarAuditoriasAlServidorCentral();
+                    ModuloAuditoria.EnviarAuditoriasAlServidorCentral(silencioso: false, soloRegistros: true);
                 }
                 else
                 {
@@ -415,11 +469,47 @@ namespace CapturaNotarias
             }
         }
 
-        private void ItemDiagnostico_Click(object? sender, EventArgs e)
+        private void ItemEnviarPDFs_Click(object? sender, EventArgs e)
         {
-            using (FormDiagnostico frm = new FormDiagnostico())
+            // Solicitar el PIN maestro al usuario para autorizar la transferencia de archivos PDF
+            InicializarUsuariosJson();
+
+            string pinMaestroCorrecto = "2003";
+            string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
+            
+            if (File.Exists(rutaUsuarios))
             {
-                frm.ShowDialog();
+                try
+                {
+                    string json = File.ReadAllText(rutaUsuarios);
+                    var datos = JsonConvert.DeserializeObject<DatosUsuarios>(json);
+                    if (datos != null && !string.IsNullOrEmpty(datos.PinMaestro))
+                    {
+                        pinMaestroCorrecto = datos.PinMaestro;
+                    }
+                }
+                catch { }
+            }
+
+            Form formularioPrompt = new Form() { Width = 300, Height = 150, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Acceso Autorizado", StartPosition = FormStartPosition.CenterScreen };
+            Label etiquetaTexto = new Label() { Left = 20, Top = 10, Width = 250, Text = "Ingrese el PIN Maestro:" };
+            TextBox cajaTexto = new TextBox() { Left = 20, Top = 35, Width = 240, PasswordChar = '*', MaxLength = 8 };
+            Button botonConfirmacion = new Button() { Text = "Aceptar", Left = 160, Width = 100, Top = 70, DialogResult = DialogResult.OK };
+            formularioPrompt.Controls.Add(etiquetaTexto);
+            formularioPrompt.Controls.Add(cajaTexto);
+            formularioPrompt.Controls.Add(botonConfirmacion);
+            formularioPrompt.AcceptButton = botonConfirmacion;
+
+            if (formularioPrompt.ShowDialog() == DialogResult.OK)
+            {
+                if (cajaTexto.Text == pinMaestroCorrecto)
+                {
+                    ModuloAuditoria.EnviarAuditoriasAlServidorCentral(silencioso: false, soloArchivos: true);
+                }
+                else
+                {
+                    MessageBox.Show("PIN Maestro incorrecto.", "Acceso Denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
             }
         }
 
@@ -498,6 +588,7 @@ namespace CapturaNotarias
             // Cuando cierra sesión, vuelve aquí
             txtPin.Clear();
             this.Show();
+            VerificarConexionLocal();
         }
 
         protected override void OnLoad(EventArgs e)
@@ -510,6 +601,9 @@ namespace CapturaNotarias
             }
             // Intentar inicializar al cargar la app si ya hay una ruta configurada
             InicializarUsuariosJson();
+            
+            // Verificar conexión local al iniciar
+            VerificarConexionLocal();
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)

@@ -59,6 +59,35 @@ namespace CapturaNotarias
         public static string UrlApi = "https://app.astronmx.cloud/api/digitalizacion/registrar";
         public static bool ActivarEnvioAuditoria = false;
 
+        // Configuración fija del servidor HTTP local integrado
+        public const string IP_SERVIDOR = "192.168.1.10";
+        public const int PUERTO_SERVIDOR = 5050;
+
+        // Se auto-detecta al cargar la configuración: si la IP local es la del servidor, actúa como servidor
+        public static bool EsServidor { get; private set; } = false;
+
+        /// <summary>
+        /// Detecta si esta PC es el servidor comparando su IP local con la IP fija del servidor.
+        /// </summary>
+        public static void DetectarSiEsServidor()
+        {
+            try
+            {
+                var host = System.Net.Dns.GetHostEntry(System.Net.Dns.GetHostName());
+                foreach (var ip in host.AddressList)
+                {
+                    if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+                        ip.ToString() == IP_SERVIDOR)
+                    {
+                        EsServidor = true;
+                        return;
+                    }
+                }
+            }
+            catch { }
+            EsServidor = false;
+        }
+
         // Obtener ruta local donde guardaremos las preferencias del usuario (Servidor y ultima ruta)
         private static string ObtenerArchivoConfig()
         {
@@ -119,6 +148,9 @@ namespace CapturaNotarias
                     }
 
                     ActivarEnvioAuditoria = config.ActivarEnvioAuditoria;
+
+                    // Auto-detectar si esta PC es el servidor
+                    DetectarSiEsServidor();
 
                     return config;
                 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace CapturaNotarias
@@ -13,6 +14,8 @@ namespace CapturaNotarias
         private Button btnSeleccionarTodos = null!;
         private Button btnDeseleccionarTodos = null!;
         private Label lblTitulo = null!;
+        private RadioButton rbPorArchivos = null!;
+        private RadioButton rbPorVolumenes = null!;
         
         private readonly List<RegistroAuditoria> _registrosOriginales;
         public List<RegistroAuditoria> RegistrosSeleccionados { get; private set; } = new List<RegistroAuditoria>();
@@ -36,18 +39,40 @@ namespace CapturaNotarias
 
             lblTitulo = new Label()
             {
-                Text = "Selecciona los archivos que deseas enviar al servidor:",
-                Location = new Point(20, 15),
-                Size = new Size(560, 25),
+                Text = "Selecciona los elementos que deseas enviar al servidor:",
+                Location = new Point(20, 12),
+                Size = new Size(560, 22),
                 Font = new Font("Arial", 11, FontStyle.Bold),
                 ForeColor = Color.FromArgb(40, 40, 40)
             };
 
+            // Selectores de agrupación
+            rbPorArchivos = new RadioButton()
+            {
+                Text = "Por Archivos Individuales",
+                Checked = true,
+                Location = new Point(20, 40),
+                Size = new Size(200, 22),
+                Font = new Font("Arial", 9.5F, FontStyle.Bold),
+                ForeColor = Color.FromArgb(60, 60, 60)
+            };
+            rbPorVolumenes = new RadioButton()
+            {
+                Text = "Por Volúmenes (Agrupado)",
+                Location = new Point(230, 40),
+                Size = new Size(220, 22),
+                Font = new Font("Arial", 9.5F, FontStyle.Bold),
+                ForeColor = Color.FromArgb(60, 60, 60)
+            };
+
+            rbPorArchivos.CheckedChanged += (s, e) => { if (rbPorArchivos.Checked) LlenarGrid(); };
+            rbPorVolumenes.CheckedChanged += (s, e) => { if (rbPorVolumenes.Checked) LlenarGrid(); };
+
             // Grid
             gridArchivos = new DataGridView()
             {
-                Location = new Point(20, 50),
-                Size = new Size(560, 300),
+                Location = new Point(20, 72),
+                Size = new Size(560, 278),
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = false,
                 AllowUserToResizeRows = false,
@@ -80,7 +105,7 @@ namespace CapturaNotarias
                 Name = "colArchivo",
                 HeaderText = "Archivo PDF",
                 ReadOnly = true,
-                Width = 200,
+                Width = 190,
                 SortMode = DataGridViewColumnSortMode.NotSortable
             };
             var colNotaria = new DataGridViewTextBoxColumn()
@@ -88,7 +113,7 @@ namespace CapturaNotarias
                 Name = "colNotaria",
                 HeaderText = "Notaría",
                 ReadOnly = true,
-                Width = 100,
+                Width = 160,
                 SortMode = DataGridViewColumnSortMode.NotSortable
             };
             var colPaginas = new DataGridViewTextBoxColumn()
@@ -104,7 +129,7 @@ namespace CapturaNotarias
                 Name = "colFecha",
                 HeaderText = "Fecha / Hora",
                 ReadOnly = true,
-                Width = 135,
+                Width = 90,
                 SortMode = DataGridViewColumnSortMode.NotSortable
             };
 
@@ -162,6 +187,8 @@ namespace CapturaNotarias
             btnDeseleccionarTodos.FlatAppearance.BorderColor = Color.LightGray;
 
             this.Controls.Add(lblTitulo);
+            this.Controls.Add(rbPorArchivos);
+            this.Controls.Add(rbPorVolumenes);
             this.Controls.Add(gridArchivos);
             this.Controls.Add(btnSeleccionarTodos);
             this.Controls.Add(btnDeseleccionarTodos);
@@ -171,44 +198,35 @@ namespace CapturaNotarias
 
         private void LlenarGrid()
         {
-            foreach (var reg in _registrosOriginales)
+            gridArchivos.Rows.Clear();
+
+            if (rbPorArchivos.Checked)
             {
-                string notariaMostrada = reg.Notaria ?? "";
+                // Configurar columnas para archivos individuales
+                gridArchivos.Columns["colArchivo"].Visible = true;
+                gridArchivos.Columns["colNotaria"].HeaderText = "Notaría";
+                gridArchivos.Columns["colPaginas"].HeaderText = "Págs";
+                gridArchivos.Columns["colFecha"].HeaderText = "Fecha / Hora";
 
-                if (reg.Detalles != null && reg.Detalles.StartsWith("PDF Escaneado en ", StringComparison.OrdinalIgnoreCase))
+                foreach (var reg in _registrosOriginales)
                 {
-                    string ruta = reg.Detalles.Substring("PDF Escaneado en ".Length);
-                    string[] segmentos = ruta.Split(new char[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries);
-
-                    string volumenStr = "";
-                    string notariaStr = "";
-
-                    for (int i = 0; i < segmentos.Length; i++)
-                    {
-                        if (segmentos[i].StartsWith("VOLUMEN", StringComparison.OrdinalIgnoreCase))
-                        {
-                            volumenStr = segmentos[i];
-                            if (i > 0 && !segmentos[i - 1].Equals("NOTARIAS", StringComparison.OrdinalIgnoreCase) && segmentos[i - 1].Length > 2 && !segmentos[i - 1].Contains(":"))
-                            {
-                                notariaStr = segmentos[i - 1];
-                            }
-                        }
-                    }
-
-                    if (!string.IsNullOrEmpty(volumenStr))
-                    {
-                        if (!string.IsNullOrEmpty(notariaStr))
-                        {
-                            notariaMostrada = notariaStr + " - " + volumenStr;
-                        }
-                        else
-                        {
-                            notariaMostrada = (string.IsNullOrEmpty(notariaMostrada) || notariaMostrada.Equals("NOTARIAS", StringComparison.OrdinalIgnoreCase) ? "" : notariaMostrada + " - ") + volumenStr;
-                        }
-                    }
+                    string notariaMostrada = ObtenerNotariaVolumen(reg);
+                    gridArchivos.Rows.Add(true, reg.ArchivoOriginal, notariaMostrada, reg.Paginas, reg.FechaHora);
                 }
+            }
+            else
+            {
+                // Configurar columnas para volúmenes agrupados
+                gridArchivos.Columns["colArchivo"].Visible = false;
+                gridArchivos.Columns["colNotaria"].HeaderText = "Notaría - Volumen";
+                gridArchivos.Columns["colPaginas"].HeaderText = "Total Págs";
+                gridArchivos.Columns["colFecha"].HeaderText = "Archivos";
 
-                gridArchivos.Rows.Add(true, reg.ArchivoOriginal, notariaMostrada, reg.Paginas, reg.FechaHora);
+                var grupos = ObtenerGruposVolumenes();
+                foreach (var g in grupos)
+                {
+                    gridArchivos.Rows.Add(true, "", g.NotariaVolumen, g.TotalPaginas, g.CantidadArchivos + " archivos");
+                }
             }
         }
 
@@ -224,24 +242,104 @@ namespace CapturaNotarias
         {
             RegistrosSeleccionados.Clear();
 
-            for (int i = 0; i < gridArchivos.Rows.Count; i++)
+            if (rbPorArchivos.Checked)
             {
-                var row = gridArchivos.Rows[i];
-                bool isChecked = Convert.ToBoolean(row.Cells["colSelect"].Value);
-                if (isChecked)
+                for (int i = 0; i < gridArchivos.Rows.Count; i++)
                 {
-                    RegistrosSeleccionados.Add(_registrosOriginales[i]);
+                    var row = gridArchivos.Rows[i];
+                    bool isChecked = Convert.ToBoolean(row.Cells["colSelect"].Value);
+                    if (isChecked)
+                    {
+                        RegistrosSeleccionados.Add(_registrosOriginales[i]);
+                    }
+                }
+            }
+            else
+            {
+                var grupos = ObtenerGruposVolumenes();
+                for (int i = 0; i < gridArchivos.Rows.Count; i++)
+                {
+                    var row = gridArchivos.Rows[i];
+                    bool isChecked = Convert.ToBoolean(row.Cells["colSelect"].Value);
+                    if (isChecked)
+                    {
+                        string notariaVolumen = row.Cells["colNotaria"].Value?.ToString() ?? "";
+                        var grupo = grupos.FirstOrDefault(g => g.NotariaVolumen == notariaVolumen);
+                        if (grupo != null)
+                        {
+                            RegistrosSeleccionados.AddRange(grupo.Registros);
+                        }
+                    }
                 }
             }
 
             if (RegistrosSeleccionados.Count == 0)
             {
-                MessageBox.Show("Por favor, selecciona al menos un archivo para sincronizar.", "Atención", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("Por favor, selecciona al menos un elemento para sincronizar.", "Atención", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
             this.DialogResult = DialogResult.OK;
             this.Close();
+        }
+
+        public class GrupoVolumen
+        {
+            public string NotariaVolumen { get; set; } = "";
+            public List<RegistroAuditoria> Registros { get; set; } = new List<RegistroAuditoria>();
+            public int CantidadArchivos => Registros.Count;
+            public int TotalPaginas => Registros.Sum(r => r.Paginas);
+        }
+
+        private List<GrupoVolumen> ObtenerGruposVolumenes()
+        {
+            var grupos = new Dictionary<string, GrupoVolumen>();
+            foreach (var reg in _registrosOriginales)
+            {
+                string key = ObtenerNotariaVolumen(reg);
+                if (!grupos.ContainsKey(key))
+                {
+                    grupos[key] = new GrupoVolumen { NotariaVolumen = key };
+                }
+                grupos[key].Registros.Add(reg);
+            }
+            return grupos.Values.ToList();
+        }
+
+        private string ObtenerNotariaVolumen(RegistroAuditoria reg)
+        {
+            string notariaMostrada = reg.Notaria ?? "General";
+
+            if (reg.Detalles != null && reg.Detalles.StartsWith("PDF Escaneado en ", StringComparison.OrdinalIgnoreCase))
+            {
+                string ruta = reg.Detalles.Substring("PDF Escaneado en ".Length);
+                string[] segmentos = ruta.Split(new char[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries);
+
+                string volumenStr = "";
+                string notariaStr = "";
+
+                for (int i = 0; i < segmentos.Length; i++)
+                {
+                    if (segmentos[i].StartsWith("VOLUMEN", StringComparison.OrdinalIgnoreCase))
+                    {
+                        volumenStr = segmentos[i];
+                        if (i > 0 && !segmentos[i - 1].Equals("NOTARIAS", StringComparison.OrdinalIgnoreCase) && segmentos[i - 1].Length > 2 && !segmentos[i - 1].Contains(":"))
+                        {
+                            notariaStr = segmentos[i - 1];
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(volumenStr))
+                {
+                    if (!string.IsNullOrEmpty(notariaStr))
+                    {
+                        return notariaStr + " - " + volumenStr;
+                    }
+                    return (string.IsNullOrEmpty(notariaMostrada) || notariaMostrada.Equals("NOTARIAS", StringComparison.OrdinalIgnoreCase) ? "" : notariaMostrada + " - ") + volumenStr;
+                }
+            }
+            return notariaMostrada;
         }
     }
 }

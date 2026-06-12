@@ -143,6 +143,10 @@ namespace CapturaNotarias
             
             if (dgvAuditoria.Columns.Contains("Usuario")) dgvAuditoria.Columns["Usuario"].Visible = false; // Ocultar el username corto
             if (dgvAuditoria.Columns.Contains("Accion")) dgvAuditoria.Columns["Accion"].Visible = false; // Ocultar Acción ya que solo capturan
+            if (dgvAuditoria.Columns.Contains("RutaLocal")) dgvAuditoria.Columns["RutaLocal"].Visible = false;
+            if (dgvAuditoria.Columns.Contains("RutaJsonOrigen")) dgvAuditoria.Columns["RutaJsonOrigen"].Visible = false;
+            if (dgvAuditoria.Columns.Contains("Enviado")) dgvAuditoria.Columns["Enviado"].Visible = false;
+            if (dgvAuditoria.Columns.Contains("LugarTrabajo")) dgvAuditoria.Columns["LugarTrabajo"].Visible = false;
 
             dgvAuditoria.AutoResizeColumns();
         }

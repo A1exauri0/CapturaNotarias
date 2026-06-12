@@ -15,6 +15,21 @@ namespace CapturaNotarias
             // Cargar configuración local al arrancar
             ConfiguracionApp config = ModuloConfiguracion.CargarConfiguracion();
 
+            // Inicializar base de datos SQLite (crea tablas si no existen)
+            ServicioBaseDatos.InicializarBd();
+
+            // Migrar datos JSON existentes a SQLite (solo la primera vez)
+            MigradorJsonASqlite.EjecutarSiNecesario();
+
+            // Iniciar el worker de conteo de páginas en background
+            ServicioContadorPaginas.Iniciar();
+
+            // Si esta PC está configurada como servidor, iniciar el receptor HTTP
+            if (ModuloConfiguracion.EsServidor)
+            {
+                ServidorHttpLocal.Iniciar();
+            }
+
             // Si no se ha asignado tipo de captura a esta PC, abrir el formulario para pedirlo
             if (string.IsNullOrEmpty(config.TipoCaptura))
             {
