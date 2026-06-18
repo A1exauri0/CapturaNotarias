@@ -112,7 +112,7 @@ namespace CapturaNotarias
             {
                 string json = "";
                 using (var fs = new FileStream(rutaJson, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                using (var sr = new StreamReader(fs))
+                using (var sr = new StreamReader(fs, System.Text.Encoding.UTF8))
                 {
                     json = sr.ReadToEnd();
                 }

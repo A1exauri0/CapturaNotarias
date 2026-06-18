@@ -388,7 +388,7 @@ namespace CapturaNotarias
             System.Threading.Tasks.Task.Run(() =>
             {
                 try { ServicioExportacionRed.ExportarARedLocal(); } catch { }
-                try { ModuloAuditoria.EnviarAuditoriasAlServidorCentral(true); } catch { }
+                try { ModuloAuditoria.EnviarAuditoriasAlServidorCentral(silencioso: true, soloRegistros: true); } catch { }
             });
         }
 
@@ -423,11 +423,6 @@ namespace CapturaNotarias
                 // 2. Exportar datos de SQLite local a la carpeta de red (respaldo)
                 try { ServicioExportacionRed.ExportarARedLocal(); } catch { }
 
-                // 3. Si somos servidor, intentar sincronización HTTP al servidor central (nube)
-                if (ModuloConfiguracion.EsServidor)
-                {
-                    try { ModuloAuditoria.EnviarAuditoriasAlServidorCentral(true); } catch { }
-                }
             });
         }
 

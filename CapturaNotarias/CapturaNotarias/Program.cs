@@ -18,6 +18,9 @@ namespace CapturaNotarias
             // Inicializar base de datos SQLite (crea tablas si no existen)
             ServicioBaseDatos.InicializarBd();
 
+            // Reparar registros con Mojibake en la base de datos SQLite si los hay
+            ServicioBaseDatos.RepararMojibakeBd();
+
             // Migrar datos JSON existentes a SQLite (solo la primera vez)
             MigradorJsonASqlite.EjecutarSiNecesario();
 

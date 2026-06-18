@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Windows.Forms;
 using Newtonsoft.Json;
 
@@ -16,6 +17,8 @@ namespace CapturaNotarias
         private ContextMenuStrip menuConfig;
         private Label lblAdvertencia = null!;
         private Label lblEstadoConexion = null!;
+        private System.Windows.Forms.Timer? temporizadorSincronizacionGlobal;
+        private int ultimaHoraSincronizada = -1;
 
         public FormLogin()
         {
@@ -52,6 +55,7 @@ namespace CapturaNotarias
             ToolStripMenuItem itemEnviarRegistros = new ToolStripMenuItem("🌐 Enviar Registros de Auditoría a Astronmx...");
             ToolStripMenuItem itemEnviarPDFs = new ToolStripMenuItem("📁 Transferir Archivos PDF al Servidor Central...");
             ToolStripMenuItem itemLugarTrabajo = new ToolStripMenuItem("📍 Cambiar Lugar de Trabajo...");
+            ToolStripMenuItem itemMigrarHistoricos = new ToolStripMenuItem("🔄 Importar/Verificar JSONs a Base de Datos...");
             
             itemConfigServidor.Click += BtnConfig_Click;
             itemAdminUsuarios.Click += BtnUsuarios_Click;
@@ -60,6 +64,7 @@ namespace CapturaNotarias
             itemEnviarRegistros.Click += ItemEnviarRegistros_Click;
             itemEnviarPDFs.Click += ItemEnviarPDFs_Click;
             itemLugarTrabajo.Click += ItemLugarTrabajo_Click;
+            itemMigrarHistoricos.Click += ItemMigrarHistoricos_Click;
             
             menuConfig.Items.Add(itemConfigServidor);
             menuConfig.Items.Add(itemAdminUsuarios);
@@ -68,6 +73,7 @@ namespace CapturaNotarias
             menuConfig.Items.Add(itemEnviarRegistros);
             menuConfig.Items.Add(itemEnviarPDFs);
             menuConfig.Items.Add(itemLugarTrabajo);
+            menuConfig.Items.Add(itemMigrarHistoricos);
 
             btnConfig.Click += (s, e) => {
                 menuConfig.Show(btnConfig, new Point(0, btnConfig.Height));
@@ -504,7 +510,288 @@ namespace CapturaNotarias
             {
                 if (cajaTexto.Text == pinMaestroCorrecto)
                 {
-                    ModuloAuditoria.EnviarAuditoriasAlServidorCentral(silencioso: false, soloArchivos: true);
+                    List<string> carpetasSeleccionadas = new List<string>();
+                    List<string> archivosPdfList = new List<string>();
+
+                    while (true)
+                    {
+                        using (FolderBrowserDialog fbd = new FolderBrowserDialog())
+                        {
+                            fbd.Description = "Seleccione una carpeta o volumen de Notarías a transferir:";
+                            fbd.ShowNewFolderButton = false;
+
+                            if (carpetasSeleccionadas.Count > 0)
+                            {
+                                fbd.Description = string.Format("Carpetas seleccionadas: {0}\n\nSeleccione otra carpeta o cancele para iniciar la transferencia:", carpetasSeleccionadas.Count);
+                            }
+
+                            if (fbd.ShowDialog() == DialogResult.OK)
+                            {
+                                string carpeta = fbd.SelectedPath;
+                                if (carpetasSeleccionadas.Contains(carpeta))
+                                {
+                                    MessageBox.Show("Esta carpeta ya ha sido seleccionada.", "Información", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                                    continue;
+                                }
+
+                                string[] pdfsEnCarpeta;
+                                try
+                                {
+                                    pdfsEnCarpeta = Directory.GetFiles(carpeta, "*.pdf", SearchOption.AllDirectories);
+                                }
+                                catch (Exception exScan)
+                                {
+                                    MessageBox.Show("Error al escanear la carpeta: " + exScan.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                    continue;
+                                }
+
+                                if (pdfsEnCarpeta.Length == 0)
+                                {
+                                    MessageBox.Show("No se encontraron archivos PDF en la carpeta seleccionada.", "Información", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                                    continue;
+                                }
+
+                                carpetasSeleccionadas.Add(carpeta);
+                                archivosPdfList.AddRange(pdfsEnCarpeta);
+
+                                var respuesta = MessageBox.Show(
+                                    string.Format("Se agregaron {0} archivos de la carpeta: {1}\nTotal acumulado: {2} archivos PDF.\n\n¿Desea seleccionar otra carpeta?", pdfsEnCarpeta.Length, Path.GetFileName(carpeta), archivosPdfList.Count),
+                                    "Seleccionar Varias Carpetas",
+                                    MessageBoxButtons.YesNo,
+                                    MessageBoxIcon.Question
+                                );
+
+                                if (respuesta == DialogResult.No)
+                                {
+                                    break;
+                                }
+                            }
+                            else
+                            {
+                                break;
+                            }
+                        }
+                    }
+
+                    if (archivosPdfList.Count == 0)
+                    {
+                        return;
+                    }
+
+                    string[] archivosPdf = archivosPdfList.ToArray();
+
+                    var confirmacionTransferencia = MessageBox.Show(
+                        string.Format("Se encontraron {0} archivos PDF en total.\n\n¿Desea iniciar la transferencia al servidor central ssdirec?", archivosPdf.Length),
+                        "Confirmar Transferencia",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question);
+
+                    if (confirmacionTransferencia != DialogResult.Yes)
+                    {
+                        return;
+                    }
+
+                            bool borrarLocales = true;
+
+                            // Mostrar formulario de progreso
+                            Form frmProgreso = new Form()
+                            {
+                                ClientSize = new Size(420, 100),
+                                Text = "Transferencia de Archivos PDF",
+                                FormBorderStyle = FormBorderStyle.FixedDialog,
+                                StartPosition = FormStartPosition.CenterScreen,
+                                ControlBox = false
+                            };
+                            Label lblProgreso = new Label() { Left = 30, Top = 20, Width = 360, Height = 25, Text = "Preparando transferencia..." };
+                            ProgressBar barProgreso = new ProgressBar() 
+                            { 
+                                Left = 30, 
+                                Top = 50, 
+                                Width = 360, 
+                                Height = 23, 
+                                Style = ProgressBarStyle.Continuous, 
+                                Minimum = 0, 
+                                Maximum = archivosPdf.Length, 
+                                Value = 0 
+                            };
+                            frmProgreso.Controls.Add(lblProgreso);
+                            frmProgreso.Controls.Add(barProgreso);
+
+                            frmProgreso.Show();
+                            frmProgreso.Refresh();
+
+                            System.Threading.Tasks.Task.Run(() =>
+                            {
+                                int copiados = 0;
+                                int errores = 0;
+                                List<string> archivosExitosos = new List<string>();
+                                string baseServidor = Path.Combine(@"\\172.40.5.84\ssdirec", ModuloConfiguracion.TipoCaptura);
+
+                                foreach (string rutaArchivo in archivosPdf)
+                                {
+                                    try
+                                    {
+                                        string destino = "";
+                                        string[] segmentos = rutaArchivo.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                                        int indiceNotaria = -1;
+                                        for (int i = 0; i < segmentos.Length; i++)
+                                        {
+                                            if (segmentos[i].StartsWith("NOTARIA", StringComparison.OrdinalIgnoreCase) && !segmentos[i].StartsWith("NOTARIAS", StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                indiceNotaria = i;
+                                                break;
+                                            }
+                                        }
+
+                                        if (indiceNotaria != -1)
+                                        {
+                                            string[] subsegmentos = segmentos.Skip(indiceNotaria).ToArray();
+                                            destino = Path.Combine(baseServidor, Path.Combine(subsegmentos));
+                                        }
+                                        else
+                                        {
+                                            string nombreArchivo = Path.GetFileName(rutaArchivo);
+                                            destino = Path.Combine(baseServidor, "General", nombreArchivo);
+                                        }
+
+                                        string carpetaDestino = Path.GetDirectoryName(destino) ?? "";
+                                        if (!Directory.Exists(carpetaDestino))
+                                        {
+                                            Directory.CreateDirectory(carpetaDestino);
+                                        }
+
+                                        // Copiar archivo
+                                        File.Copy(rutaArchivo, destino, true);
+
+                                        // Si el usuario eligió borrar locales
+                                        if (borrarLocales)
+                                        {
+                                            try { File.Delete(rutaArchivo); } catch { }
+                                        }
+
+                                        copiados++;
+                                        archivosExitosos.Add(Path.GetFileName(rutaArchivo));
+                                    }
+                                    catch (Exception exCopy)
+                                    {
+                                        errores++;
+                                        System.Diagnostics.Debug.WriteLine("Error al copiar: " + exCopy.Message);
+                                    }
+
+                                    // Actualizar UI
+                                    frmProgreso.Invoke((MethodInvoker)delegate
+                                    {
+                                        int completados = copiados + errores;
+                                        if (completados <= barProgreso.Maximum)
+                                        {
+                                            barProgreso.Value = completados;
+                                        }
+                                        lblProgreso.Text = string.Format("Copiando archivo {0} de {1}...", completados, archivosPdf.Length);
+                                    });
+                                }
+
+                                if (archivosExitosos.Count > 0)
+                                {
+                                    try { RepositorioAuditoria.MarcarArchivosComoExportadosRed(archivosExitosos); } catch { }
+                                }
+
+                                if (borrarLocales)
+                                {
+                                    foreach (string carpeta in carpetasSeleccionadas)
+                                    {
+                                        try
+                                        {
+                                            EliminarCarpetasVaciasRecursivo(carpeta);
+                                        }
+                                        catch { }
+                                    }
+                                }
+
+                                // Cerrar form al finalizar
+                                frmProgreso.Invoke((MethodInvoker)delegate
+                                {
+                                    frmProgreso.Close();
+                                    MessageBox.Show(
+                                        string.Format("Transferencia finalizada.\n\n• Archivos copiados: {0}\n• Errores/Omitidos: {1}", copiados, errores),
+                                        "Resultado de Transferencia",
+                                        MessageBoxButtons.OK,
+                                        MessageBoxIcon.Information);
+                                });
+                            });
+                }
+                else
+                {
+                    MessageBox.Show("PIN Maestro incorrecto.", "Acceso Denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        private static void EliminarCarpetasVaciasRecursivo(string rutaCarpeta)
+        {
+            if (!Directory.Exists(rutaCarpeta)) return;
+
+            try
+            {
+                foreach (string subcarpeta in Directory.GetDirectories(rutaCarpeta))
+                {
+                    EliminarCarpetasVaciasRecursivo(subcarpeta);
+                }
+
+                if (Directory.GetFiles(rutaCarpeta).Length == 0 && Directory.GetDirectories(rutaCarpeta).Length == 0)
+                {
+                    Directory.Delete(rutaCarpeta, false);
+                }
+            }
+            catch { }
+        }
+
+        private void ItemMigrarHistoricos_Click(object? sender, EventArgs e)
+        {
+            InicializarUsuariosJson();
+
+            string pinMaestroCorrecto = "2003";
+            string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
+            
+            if (File.Exists(rutaUsuarios))
+            {
+                try
+                {
+                    string json = File.ReadAllText(rutaUsuarios);
+                    var datos = JsonConvert.DeserializeObject<DatosUsuarios>(json);
+                    if (datos != null && !string.IsNullOrEmpty(datos.PinMaestro))
+                    {
+                        pinMaestroCorrecto = datos.PinMaestro;
+                    }
+                }
+                catch { }
+            }
+
+            Form formularioPrompt = new Form() { Width = 300, Height = 150, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Acceso Autorizado", StartPosition = FormStartPosition.CenterScreen };
+            Label etiquetaTexto = new Label() { Left = 20, Top = 10, Width = 250, Text = "Ingrese el PIN Maestro:" };
+            TextBox cajaTexto = new TextBox() { Left = 20, Top = 35, Width = 240, PasswordChar = '*', MaxLength = 8 };
+            Button botonConfirmacion = new Button() { Text = "Aceptar", Left = 160, Width = 100, Top = 70, DialogResult = DialogResult.OK };
+            formularioPrompt.Controls.Add(etiquetaTexto);
+            formularioPrompt.Controls.Add(cajaTexto);
+            formularioPrompt.Controls.Add(botonConfirmacion);
+            formularioPrompt.AcceptButton = botonConfirmacion;
+
+            if (formularioPrompt.ShowDialog() == DialogResult.OK)
+            {
+                if (cajaTexto.Text == pinMaestroCorrecto)
+                {
+                    Cursor.Current = Cursors.WaitCursor;
+                    var result = ModuloAuditoria.MigrarJsonHistoricosASqlite();
+                    Cursor.Current = Cursors.Default;
+
+                    string msg = string.Format(
+                        "Proceso de importación/verificación finalizado:\n\n" +
+                        "• Archivos JSON encontrados: {0}\n" +
+                        "• Registros totales leídos: {1}\n" +
+                        "• Registros nuevos importados a SQLite: {2}\n" +
+                        "• Registros duplicados omitidos: {3}",
+                        result.archivos, result.leidos, result.importados, result.duplicados
+                    );
+                    MessageBox.Show(msg, "Resultado de Importación", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 else
                 {
@@ -604,6 +891,52 @@ namespace CapturaNotarias
             
             // Verificar conexión local al iniciar
             VerificarConexionLocal();
+
+            // Iniciar temporizador global de sincronización horaria
+            InicializarSincronizacionGlobal();
+
+            // Depurar registros no exportados cuyos archivos ya no existen localmente
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                RepositorioAuditoria.DepurarRegistrosSinArchivoFisico();
+            });
+        }
+
+        private void InicializarSincronizacionGlobal()
+        {
+            temporizadorSincronizacionGlobal = new System.Windows.Forms.Timer();
+            // Verificar cada 10 segundos para máxima precisión
+            temporizadorSincronizacionGlobal.Interval = 10000;
+            temporizadorSincronizacionGlobal.Tick += TemporizadorSincronizacionGlobal_Tick;
+            temporizadorSincronizacionGlobal.Start();
+        }
+
+        private void TemporizadorSincronizacionGlobal_Tick(object? sender, EventArgs e)
+        {
+            // Solo el servidor realiza el envío automático a la nube
+            if (!ModuloConfiguracion.EsServidor)
+            {
+                return;
+            }
+
+            int horaActual = DateTime.Now.Hour;
+            int minutoActual = DateTime.Now.Minute;
+
+            // Si es el minuto 0 (en punto de la hora) y no se ha enviado en esta hora
+            if (minutoActual == 0 && ultimaHoraSincronizada != horaActual)
+            {
+                ultimaHoraSincronizada = horaActual;
+
+                System.Threading.Tasks.Task.Run(() =>
+                {
+                    try
+                    {
+                        // Enviar registros al servidor central (nube) de forma silenciosa
+                        ModuloAuditoria.EnviarAuditoriasAlServidorCentral(silencioso: true, soloRegistros: true);
+                    }
+                    catch { }
+                });
+            }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)

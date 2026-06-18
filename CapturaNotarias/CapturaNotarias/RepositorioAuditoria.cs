@@ -300,6 +300,58 @@ namespace CapturaNotarias
         }
 
         /// <summary>
+        /// Obtiene los registros de tipo Capturado de los últimos N días.
+        /// </summary>
+        public static List<RegistroAuditoria> ObtenerCapturasRecientes(int dias)
+        {
+            var lista = new List<RegistroAuditoria>();
+            try
+            {
+                string fechaLimite = DateTime.Now.AddDays(-dias).ToString("yyyy-MM-dd");
+                using (var conexion = ServicioBaseDatos.ObtenerConexion())
+                using (var cmd = conexion.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT * FROM registros_auditoria WHERE accion = 'Capturado' AND fecha >= @fechaLimite ORDER BY fecha_hora ASC";
+                    cmd.Parameters.AddWithValue("@fechaLimite", fechaLimite);
+                    using (var lector = cmd.ExecuteReader())
+                    {
+                        while (lector.Read())
+                        {
+                            lista.Add(MapearRegistro(lector));
+                        }
+                    }
+                }
+            }
+            catch { }
+            return lista;
+        }
+
+        /// <summary>
+        /// Obtiene los registros locales que no han sido enviados al servidor central.
+        /// </summary>
+        public static List<RegistroAuditoria> ObtenerRegistrosNoEnviados()
+        {
+            var lista = new List<RegistroAuditoria>();
+            try
+            {
+                using (var conexion = ServicioBaseDatos.ObtenerConexion())
+                using (var cmd = conexion.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT * FROM registros_auditoria WHERE enviado = 0 ORDER BY fecha_hora ASC";
+                    using (var lector = cmd.ExecuteReader())
+                    {
+                        while (lector.Read())
+                        {
+                            lista.Add(MapearRegistro(lector));
+                        }
+                    }
+                }
+            }
+            catch { }
+            return lista;
+        }
+
+        /// <summary>
         /// Obtiene registros locales no exportados a la red.
         /// </summary>
         public static List<RegistroAuditoria> ObtenerRegistrosNoExportados()
@@ -325,6 +377,23 @@ namespace CapturaNotarias
             }
             catch { }
             return lista;
+        }
+
+        /// <summary>
+        /// Retorna el conteo total de registros de auditoría en la base de datos local.
+        /// </summary>
+        public static int ObtenerTotalRegistrosCount()
+        {
+            try
+            {
+                using (var conexion = ServicioBaseDatos.ObtenerConexion())
+                using (var cmd = conexion.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT COUNT(*) FROM registros_auditoria";
+                    return Convert.ToInt32(cmd.ExecuteScalar());
+                }
+            }
+            catch { return 0; }
         }
 
         /// <summary>
@@ -374,6 +443,35 @@ namespace CapturaNotarias
         }
 
         /// <summary>
+        /// Marca una lista de registros como enviados (enviado = 1) en SQLite local.
+        /// </summary>
+        public static void MarcarComoEnviado(List<RegistroAuditoria> registros)
+        {
+            if (registros == null || registros.Count == 0) return;
+            try
+            {
+                using (var conexion = ServicioBaseDatos.ObtenerConexion())
+                using (var transaccion = conexion.BeginTransaction())
+                {
+                    using (var cmd = conexion.CreateCommand())
+                    {
+                        cmd.CommandText = "UPDATE registros_auditoria SET enviado = 1 WHERE id = @id";
+
+                        var pId = cmd.Parameters.Add("@id", SqliteType.Integer);
+
+                        foreach (var reg in registros)
+                        {
+                            pId.Value = reg.Id;
+                            cmd.ExecuteNonQuery();
+                        }
+                    }
+                    transaccion.Commit();
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
         /// Sincroniza el estado "enviado" desde los JSONs de la red de vuelta al SQLite local.
         /// Se llama antes de exportar para no sobreescribir el trabajo del servidor.
         /// </summary>
@@ -410,6 +508,7 @@ namespace CapturaNotarias
 
         /// <summary>
         /// Inserta un registro desde la migración JSON (sin validaciones de PC/usuario activo).
+        /// Si ya existe, actualiza las páginas si el nuevo valor es mayor y los campos vacíos.
         /// </summary>
         public static bool InsertarRegistroMigracion(RegistroAuditoria reg)
         {
@@ -423,12 +522,18 @@ namespace CapturaNotarias
                 using (var cmd = conexion.CreateCommand())
                 {
                     cmd.CommandText = @"
-                        INSERT OR IGNORE INTO registros_auditoria 
+                        INSERT INTO registros_auditoria 
                         (fecha_hora, fecha, usuario, nombre_completo, turno, pc, ip, notaria, 
                          accion, archivo_original, detalles, paginas, lugar_trabajo, enviado, exportado_red, ruta_local)
                         VALUES 
                         (@fecha_hora, @fecha, @usuario, @nombre_completo, @turno, @pc, @ip, @notaria,
-                         @accion, @archivo_original, @detalles, @paginas, @lugar_trabajo, @enviado, 0, @ruta_local)";
+                         @accion, @archivo_original, @detalles, @paginas, @lugar_trabajo, @enviado, 0, @ruta_local)
+                        ON CONFLICT(archivo_original, pc, fecha) WHERE accion = 'Capturado'
+                        DO UPDATE SET 
+                            paginas = CASE WHEN excluded.paginas > registros_auditoria.paginas THEN excluded.paginas ELSE registros_auditoria.paginas END,
+                            nombre_completo = CASE WHEN registros_auditoria.nombre_completo IS NULL OR registros_auditoria.nombre_completo = '' THEN excluded.nombre_completo ELSE registros_auditoria.nombre_completo END,
+                            usuario = CASE WHEN registros_auditoria.usuario IS NULL OR registros_auditoria.usuario = '' THEN excluded.usuario ELSE registros_auditoria.usuario END,
+                            ruta_local = CASE WHEN registros_auditoria.ruta_local IS NULL OR registros_auditoria.ruta_local = '' THEN excluded.ruta_local ELSE registros_auditoria.ruta_local END";
 
                     cmd.Parameters.AddWithValue("@fecha_hora", reg.FechaHora ?? "");
                     cmd.Parameters.AddWithValue("@fecha", fecha);
@@ -454,6 +559,7 @@ namespace CapturaNotarias
 
         /// <summary>
         /// Inserta un lote de registros desde la migración JSON o sincronización en una sola transacción.
+        /// Si ya existe, actualiza las páginas si el nuevo valor es mayor y los campos vacíos.
         /// </summary>
         public static void InsertarRegistrosMigracionBatch(List<RegistroAuditoria> registros)
         {
@@ -466,12 +572,18 @@ namespace CapturaNotarias
                     using (var cmd = conexion.CreateCommand())
                     {
                         cmd.CommandText = @"
-                            INSERT OR IGNORE INTO registros_auditoria 
+                            INSERT INTO registros_auditoria 
                             (fecha_hora, fecha, usuario, nombre_completo, turno, pc, ip, notaria, 
                              accion, archivo_original, detalles, paginas, lugar_trabajo, enviado, exportado_red, ruta_local)
                             VALUES 
                             (@fecha_hora, @fecha, @usuario, @nombre_completo, @turno, @pc, @ip, @notaria,
-                             @accion, @archivo_original, @detalles, @paginas, @lugar_trabajo, @enviado, 0, @ruta_local)";
+                             @accion, @archivo_original, @detalles, @paginas, @lugar_trabajo, @enviado, 0, @ruta_local)
+                            ON CONFLICT(archivo_original, pc, fecha) WHERE accion = 'Capturado'
+                            DO UPDATE SET 
+                                paginas = CASE WHEN excluded.paginas > registros_auditoria.paginas THEN excluded.paginas ELSE registros_auditoria.paginas END,
+                                nombre_completo = CASE WHEN registros_auditoria.nombre_completo IS NULL OR registros_auditoria.nombre_completo = '' THEN excluded.nombre_completo ELSE registros_auditoria.nombre_completo END,
+                                usuario = CASE WHEN registros_auditoria.usuario IS NULL OR registros_auditoria.usuario = '' THEN excluded.usuario ELSE registros_auditoria.usuario END,
+                                ruta_local = CASE WHEN registros_auditoria.ruta_local IS NULL OR registros_auditoria.ruta_local = '' THEN excluded.ruta_local ELSE registros_auditoria.ruta_local END";
 
                         var pFechaHora = cmd.Parameters.Add("@fecha_hora", SqliteType.Text);
                         var pFecha = cmd.Parameters.Add("@fecha", SqliteType.Text);
@@ -540,10 +652,137 @@ namespace CapturaNotarias
             return "";
         }
 
+        /// <summary>
+        /// Marca registros de la base de datos como exportados a red según su nombre de archivo original.
+        /// </summary>
+        public static void MarcarArchivosComoExportadosRed(List<string> nombresArchivos)
+        {
+            if (nombresArchivos == null || nombresArchivos.Count == 0) return;
+            try
+            {
+                using (var conexion = ServicioBaseDatos.ObtenerConexion())
+                using (var transaccion = conexion.BeginTransaction())
+                {
+                    using (var cmd = conexion.CreateCommand())
+                    {
+                        cmd.CommandText = "UPDATE registros_auditoria SET exportado_red = 1 WHERE archivo_original = @archivo";
+                        var pArchivo = cmd.Parameters.Add("@archivo", SqliteType.Text);
+
+                        foreach (var archivo in nombresArchivos)
+                        {
+                            pArchivo.Value = archivo;
+                            cmd.ExecuteNonQuery();
+                        }
+                    }
+                    transaccion.Commit();
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Busca registros donde el archivo local ya no existe físicamente en el disco,
+        /// y los marca como exportados a red (exportado_red = 1) para depurar la base de datos.
+        /// </summary>
+        public static void DepurarRegistrosSinArchivoFisico()
+        {
+            try
+            {
+                var noExportados = ObtenerRegistrosNoExportados();
+                if (noExportados == null || noExportados.Count == 0) return;
+
+                var idsAMarcar = new List<long>();
+                var cacheDirectorios = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+                var cacheUnidades = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var reg in noExportados)
+                {
+                    if (string.IsNullOrEmpty(reg.RutaLocal))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        string root = Path.GetPathRoot(reg.RutaLocal) ?? "";
+                        if (string.IsNullOrEmpty(root))
+                        {
+                            idsAMarcar.Add(reg.Id);
+                            continue;
+                        }
+
+                        bool unidadLista = false;
+                        if (root.StartsWith("\\\\"))
+                        {
+                            unidadLista = true;
+                        }
+                        else
+                        {
+                            if (!cacheUnidades.TryGetValue(root, out unidadLista))
+                            {
+                                try
+                                {
+                                    var driveInfo = new DriveInfo(root);
+                                    unidadLista = driveInfo.IsReady;
+                                }
+                                catch
+                                {
+                                    unidadLista = false;
+                                }
+                                cacheUnidades[root] = unidadLista;
+                            }
+                        }
+
+                        if (!unidadLista)
+                        {
+                            idsAMarcar.Add(reg.Id);
+                            continue;
+                        }
+
+                        string? dir = Path.GetDirectoryName(reg.RutaLocal);
+                        if (string.IsNullOrEmpty(dir))
+                        {
+                            idsAMarcar.Add(reg.Id);
+                            continue;
+                        }
+
+                        if (!cacheDirectorios.TryGetValue(dir, out bool dirExiste))
+                        {
+                            dirExiste = Directory.Exists(dir);
+                            cacheDirectorios[dir] = dirExiste;
+                        }
+
+                        if (!dirExiste)
+                        {
+                            idsAMarcar.Add(reg.Id);
+                        }
+                        else
+                        {
+                            if (!File.Exists(reg.RutaLocal))
+                            {
+                                idsAMarcar.Add(reg.Id);
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        idsAMarcar.Add(reg.Id);
+                    }
+                }
+
+                if (idsAMarcar.Count > 0)
+                {
+                    MarcarComoExportadoRed(idsAMarcar);
+                }
+            }
+            catch { }
+        }
+
         private static RegistroAuditoria MapearRegistro(SqliteDataReader lector)
         {
             return new RegistroAuditoria
             {
+                Id = lector.IsDBNull(lector.GetOrdinal("id")) ? 0 : lector.GetInt64(lector.GetOrdinal("id")),
                 FechaHora = lector.IsDBNull(lector.GetOrdinal("fecha_hora")) ? null : lector.GetString(lector.GetOrdinal("fecha_hora")),
                 Usuario = lector.IsDBNull(lector.GetOrdinal("usuario")) ? null : lector.GetString(lector.GetOrdinal("usuario")),
                 NombreCompleto = lector.IsDBNull(lector.GetOrdinal("nombre_completo")) ? null : lector.GetString(lector.GetOrdinal("nombre_completo")),

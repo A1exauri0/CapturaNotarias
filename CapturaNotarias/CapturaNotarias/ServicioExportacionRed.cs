@@ -54,7 +54,7 @@ namespace CapturaNotarias
                     {
                         string jsonExistente = "";
                         using (var fs = new FileStream(rutaJsonRed, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                        using (var sr = new StreamReader(fs))
+                        using (var sr = new StreamReader(fs, System.Text.Encoding.UTF8))
                         {
                             jsonExistente = sr.ReadToEnd();
                         }
