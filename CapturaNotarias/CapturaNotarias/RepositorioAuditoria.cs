@@ -249,6 +249,13 @@ namespace CapturaNotarias
                     // Recontar cada uno
                     foreach (var (id, rutaLocal, paginasActuales) in registros)
                     {
+                        // Si ya tiene páginas registradas (> 0), saltar el conteo físico para optimizar velocidad
+                        if (paginasActuales > 0)
+                        {
+                            totalPaginas += paginasActuales;
+                            continue;
+                        }
+
                         if (!string.IsNullOrEmpty(rutaLocal) && File.Exists(rutaLocal))
                         {
                             int paginasNuevas = ServicioContadorPaginas.ContarPaginasSincrono(rutaLocal);

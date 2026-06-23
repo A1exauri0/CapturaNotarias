@@ -11,7 +11,6 @@ namespace CapturaNotarias
         private Label lblUsuario = null!;
         private Label lblRuta = null!;
         private Label lblContador = null!;
-        private Label lblEstadoConexion = null!;
         private Button btnCambiarRuta = null!;
         private Button btnCerrarSesion = null!;
         private Button btnReconteo = null!;
@@ -26,7 +25,6 @@ namespace CapturaNotarias
         {
             configLocal = ModuloConfiguracion.CargarConfiguracion();
             InitializeComponent();
-            ServicioContadorPaginas.FormularioActivo = this;
             CargarContadorDelDia();
             ConfigurarWatcher(configLocal.UltimaRutaVigilada);
             IniciarTemporizadorSincronizacion();
@@ -56,15 +54,7 @@ namespace CapturaNotarias
             lblRuta = new Label() { Text = "Vigilando: Ninguna ruta", AutoSize = false, Location = new Point(20, 50), Size = new Size(380, 45), Font = new Font("Arial", 9.5F), ForeColor = Color.DimGray };
             lblContador = new Label() { Text = "Capturados hoy: 0", AutoSize = true, Location = new Point(20, 105), Font = new Font("Arial", 13, FontStyle.Bold), ForeColor = Color.MediumSeaGreen };
 
-            // Indicador de conexión al servidor local
-            lblEstadoConexion = new Label()
-            {
-                Text = ModuloConfiguracion.EsServidor ? "● Servidor Local" : "● Verificando...",
-                ForeColor = ModuloConfiguracion.EsServidor ? Color.RoyalBlue : Color.Gray,
-                AutoSize = true,
-                Location = new Point(220, 108),
-                Font = new Font("Arial", 9F, FontStyle.Bold)
-            };
+
 
             btnCambiarRuta = new Button() { Text = "📂 Elegir Carpeta", Location = new Point(20, 145), Size = new Size(170, 38), FlatStyle = FlatStyle.Flat, Font = new Font("Arial", 10.5F) };
             btnCerrarSesion = new Button() { Text = "Cerrar Sesión", Location = new Point(210, 145), Size = new Size(170, 38), FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Color.Firebrick, Font = new Font("Arial", 10.5F) };
@@ -79,51 +69,9 @@ namespace CapturaNotarias
             this.Controls.Add(lblUsuario);
             this.Controls.Add(lblRuta);
             this.Controls.Add(lblContador);
-            this.Controls.Add(lblEstadoConexion);
             this.Controls.Add(btnCambiarRuta);
             this.Controls.Add(btnCerrarSesion);
             this.Controls.Add(btnReconteo);
-            this.Controls.Add(btnEscanearCarpeta);
-
-            // Verificar conexión inicial al servidor (solo para clientes)
-            if (!ModuloConfiguracion.EsServidor)
-            {
-                System.Threading.Tasks.Task.Run(async () =>
-                {
-                    bool conectado = await ClienteHttpLocal.PingAsync();
-                    ActualizarEstadoConexion(conectado);
-                });
-            }
-        }
-
-        /// <summary>
-        /// Actualiza el indicador visual de conexión al servidor local.
-        /// Se puede llamar desde cualquier hilo.
-        /// </summary>
-        public void ActualizarEstadoConexion(bool conectado)
-        {
-            if (ModuloConfiguracion.EsServidor) return; // El servidor no necesita indicador
-
-            try
-            {
-                if (lblEstadoConexion.InvokeRequired)
-                {
-                    lblEstadoConexion.Invoke(new Action(() => ActualizarEstadoConexion(conectado)));
-                    return;
-                }
-
-                if (conectado)
-                {
-                    lblEstadoConexion.Text = "● Online";
-                    lblEstadoConexion.ForeColor = Color.MediumSeaGreen;
-                }
-                else
-                {
-                    lblEstadoConexion.Text = "● Offline";
-                    lblEstadoConexion.ForeColor = Color.Crimson;
-                }
-            }
-            catch { }
         }
 
         private void BtnEscanearCarpeta_Click(object? sender, EventArgs e)
@@ -394,35 +342,10 @@ namespace CapturaNotarias
 
         private void TemporizadorSincronizacion_Tick(object? sender, EventArgs e)
         {
-            System.Threading.Tasks.Task.Run(async () =>
+            System.Threading.Tasks.Task.Run(() =>
             {
-                // 1. Si NO somos servidor, reintentar envío de registros pendientes al servidor HTTP local
-                if (!ModuloConfiguracion.EsServidor)
-                {
-                    bool conectado = false;
-                    try
-                    {
-                        var pendientes = RepositorioAuditoria.ObtenerRegistrosNoExportados();
-                        if (pendientes.Count > 0)
-                        {
-                            conectado = await ClienteHttpLocal.EnviarLoteAsync(pendientes);
-                            if (conectado)
-                            {
-                                RepositorioAuditoria.MarcarTodosComoExportadoRed();
-                            }
-                        }
-                        else
-                        {
-                            conectado = await ClienteHttpLocal.PingAsync();
-                        }
-                    }
-                    catch { }
-                    ActualizarEstadoConexion(conectado);
-                }
-
-                // 2. Exportar datos de SQLite local a la carpeta de red (respaldo)
+                // Exportar datos de SQLite local a la carpeta de red (respaldo)
                 try { ServicioExportacionRed.ExportarARedLocal(); } catch { }
-
             });
         }
 
@@ -450,6 +373,8 @@ namespace CapturaNotarias
             return pinMaestroCorrecto;
         }
 
+
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             // Detener y liberar el temporizador al cerrar el formulario
@@ -465,11 +390,7 @@ namespace CapturaNotarias
             // Detener el worker de conteo de páginas
             ServicioContadorPaginas.Detener();
 
-            // Detener el servidor HTTP local si estaba activo
-            if (ModuloConfiguracion.EsServidor)
-            {
-                ServidorHttpLocal.Detener();
-            }
+
 
             // Exportar registros pendientes a la red antes de cerrar
             try { ServicioExportacionRed.ExportarARedLocal(); } catch { }

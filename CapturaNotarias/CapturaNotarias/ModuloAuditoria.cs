@@ -504,10 +504,63 @@ namespace CapturaNotarias
                 return texto.Length > 32760 ? texto.Substring(0, 32760) + "..." : texto;
             }
 
+            // Función local para obtener la fecha de reporte adaptando el turno nocturno
+            string ObtenerFechaReporte(RegistroAuditoria r)
+            {
+                if (string.IsNullOrEmpty(r.FechaHora) || r.FechaHora.Length < 10)
+                {
+                    return "Sin Fecha";
+                }
+
+                string fechaStr = r.FechaHora.Substring(0, 10);
+
+                // Si es del turno nocturno y se capturó antes de las 6:00 AM, pertenece al día anterior
+                if (!string.IsNullOrEmpty(r.Turno) && 
+                    r.Turno.Equals("Nocturno", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (DateTime.TryParse(r.FechaHora, out DateTime dt))
+                    {
+                        if (dt.Hour < 6)
+                        {
+                            return dt.AddDays(-1).ToString("yyyy-MM-dd");
+                        }
+                    }
+                }
+
+                return fechaStr;
+            }
+
             if (datos == null || datos.Count == 0)
             {
                 MessageBox.Show("No hay datos para exportar.", "Atención", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
+            }
+
+            // Re-importar los JSONs más recientes de las carpetas de red
+            // para obtener las páginas actualizadas por las PCs cliente
+            try { MigrarJsonHistoricosASqlite(); } catch { }
+
+            // Recargar los datos desde la BD con la información actualizada
+            datos = ObtenerRegistrosTodos();
+
+            // Si aún quedan registros con paginas=0, contar de forma síncrona
+            // (el servidor tiene acceso a los archivos en la carpeta compartida)
+            var pendientes = datos.Where(r => r.Paginas == 0 && !string.IsNullOrEmpty(r.RutaLocal)).ToList();
+            foreach (var reg in pendientes)
+            {
+                try
+                {
+                    if (File.Exists(reg.RutaLocal))
+                    {
+                        int pags = ServicioContadorPaginas.ContarPaginasSincrono(reg.RutaLocal!);
+                        if (pags > 0)
+                        {
+                            reg.Paginas = pags;
+                            RepositorioAuditoria.ActualizarPaginas(reg.Id, pags);
+                        }
+                    }
+                }
+                catch { }
             }
 
             // Filtrar registros inválidos (sin usuario) para evitar filas vacías en el reporte Excel
@@ -517,11 +570,7 @@ namespace CapturaNotarias
             var registrosPorFecha = new Dictionary<string, List<RegistroAuditoria>>();
             foreach (var reg in datos)
             {
-                string fecha = "Sin Fecha";
-                if (!string.IsNullOrEmpty(reg.FechaHora) && reg.FechaHora.Length >= 10)
-                {
-                    fecha = reg.FechaHora.Substring(0, 10);
-                }
+                string fecha = ObtenerFechaReporte(reg);
                 if (!registrosPorFecha.ContainsKey(fecha))
                 {
                     registrosPorFecha[fecha] = new List<RegistroAuditoria>();
@@ -586,11 +635,7 @@ namespace CapturaNotarias
 
             foreach (var reg in registrosDeduplicados)
             {
-                string fecha = "Sin Fecha";
-                if (!string.IsNullOrEmpty(reg.FechaHora) && reg.FechaHora.Length >= 10)
-                {
-                    fecha = reg.FechaHora.Substring(0, 10);
-                }
+                string fecha = ObtenerFechaReporte(reg);
 
                 if (!registrosAgrupados.ContainsKey(fecha))
                 {
@@ -981,7 +1026,6 @@ namespace CapturaNotarias
 
             return rutaLimpia.Trim('\\', '/');
         }
-
         public static void EnviarAuditoriasAlServidorCentral(bool silencioso = false, bool soloRegistros = false, bool soloArchivos = false)
         {
             // Si es en segundo plano (silencioso), respetamos la opción de desactivado
@@ -989,6 +1033,25 @@ namespace CapturaNotarias
             {
                 return;
             }
+
+            Form? mainForm = null;
+            try
+            {
+                mainForm = Application.OpenForms.Cast<Form>().FirstOrDefault(f => f.Visible);
+            }
+            catch { }
+
+            Action<Action> ejecutarEnUI = (action) =>
+            {
+                if (mainForm != null && mainForm.InvokeRequired)
+                {
+                    try { mainForm.Invoke(action); } catch { }
+                }
+                else
+                {
+                    action();
+                }
+            };
 
             UltimosNuevosRegistrados = 0;
             UltimosDuplicadosOmitidos = 0;
@@ -1033,21 +1096,34 @@ namespace CapturaNotarias
                 if (registrosPendientes.Count == 0)
                 {
                     if (!silencioso)
-                        MessageBox.Show("No hay archivos o registros pendientes de sincronizar.", "Información", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    {
+                        ejecutarEnUI(() =>
+                        {
+                            MessageBox.Show("No hay archivos o registros pendientes de sincronizar.", "Información", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        });
+                    }
                     return;
                 }
 
                 // Sincronización Selectiva si no es silencioso y no es soloRegistros
                 if (!silencioso && !soloRegistros)
                 {
-                    using (var frm = new FormSyncParcial(registrosPendientes))
+                    bool cancelado = false;
+                    List<RegistroAuditoria> tempRegistros = registrosPendientes;
+                    ejecutarEnUI(() =>
                     {
-                        if (frm.ShowDialog() != DialogResult.OK)
+                        using (var frm = new FormSyncParcial(tempRegistros))
                         {
-                            return;
+                            if (frm.ShowDialog() != DialogResult.OK)
+                            {
+                                cancelado = true;
+                                return;
+                            }
+                            tempRegistros = frm.RegistrosSeleccionados;
                         }
-                        registrosPendientes = frm.RegistrosSeleccionados;
-                    }
+                    });
+                    if (cancelado) return;
+                    registrosPendientes = tempRegistros;
                 }
 
                 Form? formularioProgreso = null;
@@ -1057,44 +1133,47 @@ namespace CapturaNotarias
 
                 if (!silencioso)
                 {
-                    formularioProgreso = new Form()
+                    ejecutarEnUI(() =>
                     {
-                        ClientSize = new Size(420, 100),
-                        Text = soloRegistros ? "Sincronización de Registros" : "Transferencia de Archivos PDF",
-                        FormBorderStyle = FormBorderStyle.FixedDialog,
-                        StartPosition = FormStartPosition.CenterScreen,
-                        ControlBox = false
-                    };
-                    etiquetaProgreso = new Label() { Left = 30, Top = 20, Width = 360, Height = 25, Text = "Iniciando proceso..." };
-                    
-                    barraArchivos = new ProgressBar() 
-                    { 
-                        Left = 30, 
-                        Top = 50, 
-                        Width = 360, 
-                        Height = 23, 
-                        Style = ProgressBarStyle.Continuous, 
-                        Minimum = 0, 
-                        Maximum = registrosPendientes.Count, 
-                        Value = 0,
-                        Visible = !soloRegistros 
-                    };
-                    
-                    barraAuditoria = new ProgressBar() 
-                    { 
-                        Left = 30, 
-                        Top = 50, 
-                        Width = 360, 
-                        Height = 23, 
-                        Style = ProgressBarStyle.Marquee, 
-                        Visible = soloRegistros 
-                    };
+                        formularioProgreso = new Form()
+                        {
+                            ClientSize = new Size(420, 100),
+                            Text = soloRegistros ? "Sincronización de Registros" : "Transferencia de Archivos PDF",
+                            FormBorderStyle = FormBorderStyle.FixedDialog,
+                            StartPosition = FormStartPosition.CenterScreen,
+                            ControlBox = false
+                        };
+                        etiquetaProgreso = new Label() { Left = 30, Top = 20, Width = 360, Height = 25, Text = "Iniciando proceso..." };
+                        
+                        barraArchivos = new ProgressBar() 
+                        { 
+                            Left = 30, 
+                            Top = 50, 
+                            Width = 360, 
+                            Height = 23, 
+                            Style = ProgressBarStyle.Continuous, 
+                            Minimum = 0, 
+                            Maximum = registrosPendientes.Count, 
+                            Value = 0,
+                            Visible = !soloRegistros 
+                        };
+                        
+                        barraAuditoria = new ProgressBar() 
+                        { 
+                            Left = 30, 
+                            Top = 50, 
+                            Width = 360, 
+                            Height = 23, 
+                            Style = ProgressBarStyle.Marquee, 
+                            Visible = soloRegistros 
+                        };
 
-                    formularioProgreso.Controls.Add(etiquetaProgreso);
-                    formularioProgreso.Controls.Add(barraArchivos);
-                    formularioProgreso.Controls.Add(barraAuditoria);
-                    formularioProgreso.Show();
-                    formularioProgreso.Refresh();
+                        formularioProgreso.Controls.Add(etiquetaProgreso);
+                        formularioProgreso.Controls.Add(barraArchivos);
+                        formularioProgreso.Controls.Add(barraAuditoria);
+                        formularioProgreso.Show();
+                        formularioProgreso.Refresh();
+                    });
                 }
 
                 // 2. Fase de copia de archivos y envío HTTP (Fuera de lock para no colgar ni bloquear capturas)
@@ -1112,12 +1191,17 @@ namespace CapturaNotarias
                     foreach (var log in registrosPendientes)
                     {
                         indice++;
-                        if (!silencioso && etiquetaProgreso != null && formularioProgreso != null && barraArchivos != null)
+                        if (!silencioso)
                         {
-                            etiquetaProgreso.Text = string.Format("Copiando archivo {0} de {1}...", indice, registrosPendientes.Count);
-                            barraArchivos.Value = indice;
-                            formularioProgreso.Refresh();
-                            Application.DoEvents();
+                            ejecutarEnUI(() =>
+                            {
+                                if (etiquetaProgreso != null)
+                                    etiquetaProgreso.Text = string.Format("Copiando archivo {0} de {1}...", indice, registrosPendientes.Count);
+                                if (barraArchivos != null)
+                                    barraArchivos.Value = indice;
+                                if (formularioProgreso != null)
+                                    formularioProgreso.Refresh();
+                            });
                         }
 
                         string rutaLocal = log.RutaLocal ?? "";
@@ -1292,9 +1376,16 @@ namespace CapturaNotarias
 
                 if (logsAEnviar.Count == 0)
                 {
-                    if (!silencioso && formularioProgreso != null)
+                    if (!silencioso)
                     {
-                        formularioProgreso.Close();
+                        ejecutarEnUI(() =>
+                        {
+                            if (formularioProgreso != null)
+                            {
+                                formularioProgreso.Close();
+                                formularioProgreso = null;
+                            }
+                        });
                     }
                     if (!silencioso)
                     {
@@ -1408,23 +1499,31 @@ namespace CapturaNotarias
                                 );
                             }
 
-                            MessageBox.Show("No se pudieron transferir los archivos al servidor central ssdirec. Verifique que la ruta de red de destino esté accesible y que su conexión de red sea estable." + detalleRutas, "Error de Sincronización", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            ejecutarEnUI(() =>
+                            {
+                                MessageBox.Show("No se pudieron transferir los archivos al servidor central ssdirec. Verifique que la ruta de red de destino esté accesible y que su conexión de red sea estable." + detalleRutas, "Error de Sincronización", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            });
                         }
                         else
                         {
-                            MessageBox.Show("No hay registros pendientes de esta PC con archivos locales disponibles para sincronizar.", "Información de Sincronización", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            ejecutarEnUI(() =>
+                            {
+                                MessageBox.Show("No hay registros pendientes de esta PC con archivos locales disponibles para sincronizar.", "Información de Sincronización", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            });
                         }
                     }
                     return;
                 }
 
-                if (!silencioso && etiquetaProgreso != null && formularioProgreso != null && barraArchivos != null && barraAuditoria != null)
+                if (!silencioso)
                 {
-                    barraArchivos.Visible = false;
-                    barraAuditoria.Visible = true;
-                    etiquetaProgreso.Text = "Enviando registros al servidor central...";
-                    formularioProgreso.Refresh();
-                    Application.DoEvents();
+                    ejecutarEnUI(() =>
+                    {
+                        if (barraArchivos != null) barraArchivos.Visible = false;
+                        if (barraAuditoria != null) barraAuditoria.Visible = true;
+                        if (etiquetaProgreso != null) etiquetaProgreso.Text = "Enviando registros al servidor central...";
+                        if (formularioProgreso != null) formularioProgreso.Refresh();
+                    });
                 }
 
                 bool exito = false;
@@ -1447,11 +1546,15 @@ namespace CapturaNotarias
                     exito = true;
                     foreach (var lote in lotes)
                     {
-                        if (!silencioso && etiquetaProgreso != null && formularioProgreso != null)
+                        if (!silencioso)
                         {
-                            etiquetaProgreso.Text = string.Format("Enviando lote de registros ({0} de {1})...", lotesExitosos.Count + lote.Count, logsAEnviar.Count);
-                            formularioProgreso.Refresh();
-                            Application.DoEvents();
+                            ejecutarEnUI(() =>
+                            {
+                                if (etiquetaProgreso != null)
+                                    etiquetaProgreso.Text = string.Format("Enviando lote de registros ({0} de {1})...", lotesExitosos.Count + lote.Count, logsAEnviar.Count);
+                                if (formularioProgreso != null)
+                                    formularioProgreso.Refresh();
+                            });
                         }
 
                         bool exitoLote = EnviarLogsAlServidorCentralHttp(lote);
@@ -1470,9 +1573,16 @@ namespace CapturaNotarias
                     }
                 }
 
-                if (!silencioso && formularioProgreso != null)
+                if (!silencioso)
                 {
-                    formularioProgreso.Close();
+                    ejecutarEnUI(() =>
+                    {
+                        if (formularioProgreso != null)
+                        {
+                            formularioProgreso.Close();
+                            formularioProgreso = null;
+                        }
+                    });
                 }
 
                 // Si se enviaron registros con éxito (aunque sea de forma parcial antes de un fallo)
@@ -1509,7 +1619,10 @@ namespace CapturaNotarias
                     {
                         if (!silencioso)
                         {
-                            MessageBox.Show(string.Format("Transferencia de archivos finalizada con éxito.\n\nURL Servidor: {0}", ModuloConfiguracion.UrlApi), "Información", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            ejecutarEnUI(() =>
+                            {
+                                MessageBox.Show(string.Format("Transferencia de archivos finalizada con éxito.\n\nURL Servidor: {0}", ModuloConfiguracion.UrlApi), "Información", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            });
                         }
                         return;
                     }
@@ -1527,7 +1640,10 @@ namespace CapturaNotarias
                             UltimosDuplicadosOmitidos,
                             ModuloConfiguracion.UrlApi
                         );
-                        MessageBox.Show(msgExito, "Resultado de Sincronización", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        ejecutarEnUI(() =>
+                        {
+                            MessageBox.Show(msgExito, "Resultado de Sincronización", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        });
                     }
                 }
                 else
@@ -1536,11 +1652,17 @@ namespace CapturaNotarias
                     {
                         if (lotesExitosos.Count > 0)
                         {
-                            MessageBox.Show(string.Format("Sincronización parcial: Se enviaron {0} registros con éxito, pero falló el envío del resto.\n\nDetalle: {1}\n\nURL Servidor: {2}\n\nSe reintentará en el próximo ciclo.", lotesExitosos.Count, UltimoErrorHttp, ModuloConfiguracion.UrlApi), "Sincronización Incompleta", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            ejecutarEnUI(() =>
+                            {
+                                MessageBox.Show(string.Format("Sincronización parcial: Se enviaron {0} registros con éxito, pero falló el envío del resto.\n\nDetalle: {1}\n\nURL Servidor: {2}\n\nSe reintentará en el próximo ciclo.", lotesExitosos.Count, UltimoErrorHttp, ModuloConfiguracion.UrlApi), "Sincronización Incompleta", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            });
                         }
                         else
                         {
-                            MessageBox.Show(string.Format("No se pudo conectar con el servidor central de auditoría o el servidor devolvió un error.\n\nDetalle: {0}\n\nURL Servidor: {1}\n\nLos registros permanecen guardados localmente para reintentar más tarde.", UltimoErrorHttp, ModuloConfiguracion.UrlApi), "Error de Sincronización", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            ejecutarEnUI(() =>
+                            {
+                                MessageBox.Show(string.Format("No se pudo conectar con el servidor central de auditoría o el servidor devolvió un error.\n\nDetalle: {0}\n\nURL Servidor: {1}\n\nLos registros permanecen guardados localmente para reintentar más tarde.", UltimoErrorHttp, ModuloConfiguracion.UrlApi), "Error de Sincronización", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            });
                         }
                     }
                 }
@@ -1548,7 +1670,12 @@ namespace CapturaNotarias
             catch (Exception ex)
             {
                 if (!silencioso)
-                    MessageBox.Show("Ocurrió un error general durante la sincronización: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                {
+                    ejecutarEnUI(() =>
+                    {
+                        MessageBox.Show("Ocurrió un error general durante la sincronización: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    });
+                }
             }
         }
 

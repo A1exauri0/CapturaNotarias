@@ -16,7 +16,6 @@ namespace CapturaNotarias
         private Button btnConfig;
         private ContextMenuStrip menuConfig;
         private Label lblAdvertencia = null!;
-        private Label lblEstadoConexion = null!;
         private System.Windows.Forms.Timer? temporizadorSincronizacionGlobal;
         private int ultimaHoraSincronizada = -1;
 
@@ -91,15 +90,7 @@ namespace CapturaNotarias
                 Visible = ModuloConfiguracion.ActivarEnvioAuditoria
             };
 
-            // Indicador de conexión
-            lblEstadoConexion = new Label()
-            {
-                Text = ModuloConfiguracion.EsServidor ? "● Servidor Local" : "● Verificando...",
-                ForeColor = ModuloConfiguracion.EsServidor ? Color.RoyalBlue : Color.Gray,
-                AutoSize = true,
-                Location = new Point(160, 242),
-                Font = new Font("Arial", 9F, FontStyle.Bold)
-            };
+
 
             this.Controls.Add(lblTitle);
             this.Controls.Add(lblUser);
@@ -109,52 +100,11 @@ namespace CapturaNotarias
             this.Controls.Add(btnLogin);
             this.Controls.Add(btnConfig);
             this.Controls.Add(lblAdvertencia);
-            this.Controls.Add(lblEstadoConexion);
             
             this.AcceptButton = btnLogin;
         }
 
-        private void ActualizarEstadoConexion(bool conectado)
-        {
-            if (ModuloConfiguracion.EsServidor) return;
 
-            try
-            {
-                if (lblEstadoConexion.InvokeRequired)
-                {
-                    lblEstadoConexion.Invoke(new Action(() => ActualizarEstadoConexion(conectado)));
-                    return;
-                }
-
-                if (conectado)
-                {
-                    lblEstadoConexion.Text = "● Online";
-                    lblEstadoConexion.ForeColor = Color.MediumSeaGreen;
-                }
-                else
-                {
-                    lblEstadoConexion.Text = "● Offline";
-                    lblEstadoConexion.ForeColor = Color.Crimson;
-                }
-            }
-            catch { }
-        }
-
-        private void VerificarConexionLocal()
-        {
-            if (ModuloConfiguracion.EsServidor)
-            {
-                lblEstadoConexion.Text = "● Servidor Local";
-                lblEstadoConexion.ForeColor = Color.RoyalBlue;
-                return;
-            }
-
-            System.Threading.Tasks.Task.Run(async () =>
-            {
-                bool conectado = await ClienteHttpLocal.PingAsync();
-                ActualizarEstadoConexion(conectado);
-            });
-        }
 
         private bool ExisteDirectorioConTimeout(string ruta, int timeoutMs)
         {
@@ -466,7 +416,17 @@ namespace CapturaNotarias
             {
                 if (cajaTexto.Text == pinMaestroCorrecto)
                 {
-                    ModuloAuditoria.EnviarAuditoriasAlServidorCentral(silencioso: false, soloRegistros: true);
+                    System.Threading.Tasks.Task.Run(() =>
+                    {
+                        try
+                        {
+                            ModuloAuditoria.EnviarAuditoriasAlServidorCentral(silencioso: false, soloRegistros: true);
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine("Error en envio manual: " + ex.Message);
+                        }
+                    });
                 }
                 else
                 {
@@ -875,7 +835,6 @@ namespace CapturaNotarias
             // Cuando cierra sesión, vuelve aquí
             txtPin.Clear();
             this.Show();
-            VerificarConexionLocal();
         }
 
         protected override void OnLoad(EventArgs e)
@@ -888,9 +847,6 @@ namespace CapturaNotarias
             }
             // Intentar inicializar al cargar la app si ya hay una ruta configurada
             InicializarUsuariosJson();
-            
-            // Verificar conexión local al iniciar
-            VerificarConexionLocal();
 
             // Iniciar temporizador global de sincronización horaria
             InicializarSincronizacionGlobal();
@@ -920,10 +876,9 @@ namespace CapturaNotarias
             }
 
             int horaActual = DateTime.Now.Hour;
-            int minutoActual = DateTime.Now.Minute;
 
-            // Si es el minuto 0 (en punto de la hora) y no se ha enviado en esta hora
-            if (minutoActual == 0 && ultimaHoraSincronizada != horaActual)
+            // Si cambió de hora o al iniciar la app
+            if (ultimaHoraSincronizada != horaActual)
             {
                 ultimaHoraSincronizada = horaActual;
 
@@ -931,6 +886,9 @@ namespace CapturaNotarias
                 {
                     try
                     {
+                        // Primero importamos de forma silenciosa los registros nuevos de las carpetas de red a la BD local
+                        ModuloAuditoria.MigrarJsonHistoricosASqlite();
+
                         // Enviar registros al servidor central (nube) de forma silenciosa
                         ModuloAuditoria.EnviarAuditoriasAlServidorCentral(silencioso: true, soloRegistros: true);
                     }

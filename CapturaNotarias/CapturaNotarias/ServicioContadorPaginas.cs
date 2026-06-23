@@ -17,10 +17,7 @@ namespace CapturaNotarias
         private static Task? _trabajador;
         private static bool _ejecutando = false;
 
-        /// <summary>
-        /// Referencia al formulario activo para actualizar el indicador de conexión.
-        /// </summary>
-        public static FormCaptura? FormularioActivo { get; set; }
+
 
         /// <summary>
         /// Inicia el worker en background. Se llama una vez al iniciar la app.
@@ -148,40 +145,22 @@ namespace CapturaNotarias
         }
 
         /// <summary>
-        /// Envía el registro completo al servidor HTTP local después de contar páginas.
-        /// Si esta PC ES el servidor, no necesita enviarse a sí misma.
+        /// Exporta los cambios a la red local después de contar páginas.
         /// </summary>
         private static async Task EnviarAlServidorLocal(long idRegistro)
         {
             // Si esta PC es el servidor, ya tiene el registro en su propia BD
             if (ModuloConfiguracion.EsServidor) return;
 
-            bool exito = false;
             try
             {
-                // Intentar enviar los registros no exportados al servidor
-                var pendientes = RepositorioAuditoria.ObtenerRegistrosNoExportados();
-                if (pendientes.Count > 0)
+                // Exportar a red local de forma asíncrona
+                await Task.Run(() =>
                 {
-                    exito = await ClienteHttpLocal.EnviarLoteAsync(pendientes);
-                    if (exito)
-                    {
-                        RepositorioAuditoria.MarcarTodosComoExportadoRed();
-                    }
-                }
-                else
-                {
-                    // No hay pendientes, pero verificamos conexión con un ping
-                    exito = await ClienteHttpLocal.PingAsync();
-                }
+                    try { ServicioExportacionRed.ExportarARedLocal(); } catch { }
+                });
             }
-            catch
-            {
-                exito = false;
-            }
-
-            // Actualizar indicador visual en el formulario
-            FormularioActivo?.ActualizarEstadoConexion(exito);
+            catch { }
         }
 
         /// <summary>
