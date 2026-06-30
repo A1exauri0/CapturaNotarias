@@ -1,8 +1,24 @@
 # Script para corregir "Paginas": 0 en auditoria.json sin requerir dependencias externas (usa PowerShell nativo)
-$jsonPath = "C:\NOTARIAS\MonitoreoCaptura\PC-09\auditoria.json"
+$numeroPc = Read-Host "Ingrese el numero de PC a reparar (ej. 09)"
+if ([string]::IsNullOrWhiteSpace($numeroPc)) {
+    Write-Host "[ERROR] Debe especificar el numero de PC." -ForegroundColor Red
+    return
+}
+
+# Formatear a PC-XX si el usuario ingresa solo digitos o texto corto
+if ($numeroPc -notmatch '^PC-') {
+    if ($numeroPc -match '^\d+$') {
+        $numeroPc = "PC-{0:D2}" -f [int]$numeroPc
+    } else {
+        $numeroPc = "PC-$numeroPc"
+    }
+}
+
+$jsonPath = "C:\NOTARIAS\MonitoreoCaptura\$numeroPc\auditoria.json"
 if (-not (Test-Path $jsonPath)) {
     $jsonPath = Join-Path $PSScriptRoot "auditoria.json"
 }
+
 
 if (-not (Test-Path $jsonPath)) {
     Write-Host "[ERROR] No se encontro el archivo auditoria.json en su ubicacion del servidor ni en: $jsonPath" -ForegroundColor Red

@@ -804,6 +804,8 @@ namespace CapturaNotarias
                 LugarTrabajo = lector.IsDBNull(lector.GetOrdinal("lugar_trabajo")) ? null : lector.GetString(lector.GetOrdinal("lugar_trabajo")),
                 Enviado = !lector.IsDBNull(lector.GetOrdinal("enviado")) && lector.GetInt32(lector.GetOrdinal("enviado")) == 1,
                 RutaLocal = lector.IsDBNull(lector.GetOrdinal("ruta_local")) ? null : lector.GetString(lector.GetOrdinal("ruta_local")),
+                Exportado = lector.IsDBNull(lector.GetOrdinal("exportado_red")) ? 0 : lector.GetInt32(lector.GetOrdinal("exportado_red")),
+                ExportadoEn = null,
             };
         }
     }

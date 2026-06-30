@@ -111,6 +111,19 @@ namespace CapturaNotarias
 
         private static async Task ContarConReintentos(long id, string ruta, CancellationToken token)
         {
+            // Si el archivo no existe físicamente en el disco, no reintentamos de forma repetitiva
+            // Se le asigna 1 página de fallback de inmediato para evitar atascar el worker en segundo plano
+            if (!File.Exists(ruta))
+            {
+                try { await Task.Delay(1000, token); } catch { return; }
+                if (!File.Exists(ruta))
+                {
+                    RepositorioAuditoria.ActualizarPaginas(id, 1);
+                    await EnviarAlServidorLocal(id);
+                    return;
+                }
+            }
+
             // Máximo 5 intentos con espera incremental
             for (int intento = 0; intento < 5; intento++)
             {
@@ -171,6 +184,16 @@ namespace CapturaNotarias
         {
             // Tiempo de gracia inicial para que el escáner comience a escribir
             try { await Task.Delay(1000, token); } catch { return false; }
+
+            // Si el archivo no existe tras el tiempo de gracia inicial, no tiene sentido continuar
+            if (!File.Exists(ruta))
+            {
+                try { await Task.Delay(1000, token); } catch { return false; }
+                if (!File.Exists(ruta))
+                {
+                    return false;
+                }
+            }
 
             long ultimoTamano = -1;
             int vecesIgual = 0;

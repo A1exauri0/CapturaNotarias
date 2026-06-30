@@ -371,8 +371,47 @@ namespace CapturaNotarias
             {
                 if (textBox.Text == pinMaestroCorrecto)
                 {
-                    var todos = ModuloAuditoria.ObtenerRegistrosTodos();
-                    ModuloAuditoria.ExportarExcel(todos);
+                    // Mostrar selector interactivo de rango de fechas
+                    using (Form selectorFechas = new Form() { Width = 320, Height = 200, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Rango del Reporte", StartPosition = FormStartPosition.CenterScreen, MaximizeBox = false, MinimizeBox = false })
+                    {
+                        Label lblInicio = new Label() { Left = 20, Top = 20, Width = 100, Text = "Fecha Inicio:", AutoSize = true };
+                        DateTimePicker dtpInicio = new DateTimePicker() { Left = 120, Top = 18, Width = 150, Format = DateTimePickerFormat.Short };
+
+                        Label lblFin = new Label() { Left = 20, Top = 60, Width = 100, Text = "Fecha Fin:", AutoSize = true };
+                        DateTimePicker dtpFin = new DateTimePicker() { Left = 120, Top = 58, Width = 150, Format = DateTimePickerFormat.Short };
+
+                        Button btnExportar = new Button() { Text = "Generar Excel", Left = 150, Width = 120, Top = 110, Height = 35, DialogResult = DialogResult.OK, FlatStyle = FlatStyle.System };
+
+                        // Rango por defecto: ultimos 7 dias
+                        dtpInicio.Value = DateTime.Today.AddDays(-7);
+                        dtpFin.Value = DateTime.Today;
+
+                        selectorFechas.Controls.Add(lblInicio);
+                        selectorFechas.Controls.Add(dtpInicio);
+                        selectorFechas.Controls.Add(lblFin);
+                        selectorFechas.Controls.Add(dtpFin);
+                        selectorFechas.Controls.Add(btnExportar);
+                        selectorFechas.AcceptButton = btnExportar;
+
+                        if (selectorFechas.ShowDialog() == DialogResult.OK)
+                        {
+                            DateTime inicio = dtpInicio.Value.Date;
+                            DateTime fin = dtpFin.Value.Date;
+
+                            var todos = ModuloAuditoria.ObtenerRegistrosTodos();
+                            // Filtrar los registros en base a la fecha del reporte adaptando el turno nocturno
+                            var filtrados = todos.Where(r => {
+                                string fechaStr = ModuloAuditoria.ObtenerFechaReporte(r);
+                                if (DateTime.TryParse(fechaStr, out DateTime rFecha))
+                                {
+                                    return rFecha.Date >= inicio && rFecha.Date <= fin;
+                                }
+                                return false;
+                            }).ToList();
+
+                            ModuloAuditoria.ExportarExcel(filtrados);
+                        }
+                    }
                 }
                 else
                 {
@@ -578,76 +617,98 @@ namespace CapturaNotarias
                             frmProgreso.Controls.Add(barProgreso);
 
                             frmProgreso.Show();
-                            frmProgreso.Refresh();
-
                             System.Threading.Tasks.Task.Run(() =>
                             {
                                 int copiados = 0;
                                 int errores = 0;
                                 List<string> archivosExitosos = new List<string>();
-                                string baseServidor = Path.Combine(@"\\172.40.5.84\ssdirec", ModuloConfiguracion.TipoCaptura);
+                                object lockObj = new object();
 
-                                foreach (string rutaArchivo in archivosPdf)
+                                using (var semaforo = new System.Threading.SemaphoreSlim(4)) // Límite de 4 subidas concurrentes
+                                using (var httpClient = new System.Net.Http.HttpClient())
                                 {
-                                    try
+                                    httpClient.Timeout = TimeSpan.FromMinutes(5); // Tiempo amplio para PDFs pesados
+
+                                    var tareas = archivosPdf.Select(async rutaArchivo =>
                                     {
-                                        string destino = "";
-                                        string[] segmentos = rutaArchivo.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                                        int indiceNotaria = -1;
-                                        for (int i = 0; i < segmentos.Length; i++)
+                                        await semaforo.WaitAsync().ConfigureAwait(false);
+                                        try
                                         {
-                                            if (segmentos[i].StartsWith("NOTARIA", StringComparison.OrdinalIgnoreCase) && !segmentos[i].StartsWith("NOTARIAS", StringComparison.OrdinalIgnoreCase))
+                                            string subrutaNotaria = "General";
+                                            string[] segmentos = rutaArchivo.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                                            int indiceNotaria = -1;
+                                            for (int i = 0; i < segmentos.Length; i++)
                                             {
-                                                indiceNotaria = i;
-                                                break;
+                                                if (segmentos[i].StartsWith("NOTARIA", StringComparison.OrdinalIgnoreCase) && !segmentos[i].StartsWith("NOTARIAS", StringComparison.OrdinalIgnoreCase))
+                                                {
+                                                    indiceNotaria = i;
+                                                    break;
+                                                }
+                                            }
+
+                                            if (indiceNotaria != -1)
+                                            {
+                                                // Obtener la notaría y el volumen (ej. NOTARIA 53\VOLUMEN 24)
+                                                string[] subsegmentos = segmentos.Skip(indiceNotaria).Take(segmentos.Length - 1 - indiceNotaria).ToArray();
+                                                subrutaNotaria = string.Join("\\", subsegmentos);
+                                            }
+
+                                            // Subir el PDF directamente al servidor de Laravel por HTTP POST en paralelo
+                                            bool subidaExito = await ModuloAuditoria.SubirPdfAlServidorHttpAsync(
+                                                httpClient,
+                                                rutaArchivo,
+                                                Path.GetFileName(rutaArchivo),
+                                                ModuloConfiguracion.TipoCaptura,
+                                                subrutaNotaria
+                                            ).ConfigureAwait(false);
+
+                                            if (subidaExito)
+                                            {
+                                                lock (lockObj)
+                                                {
+                                                    copiados++;
+                                                    archivosExitosos.Add(Path.GetFileName(rutaArchivo));
+                                                }
+
+                                                // Borrar localmente si el usuario lo decidió
+                                                if (borrarLocales)
+                                                {
+                                                    try { File.Delete(rutaArchivo); } catch { }
+                                                }
+                                            }
+                                            else
+                                            {
+                                                lock (lockObj)
+                                                {
+                                                    errores++;
+                                                }
                                             }
                                         }
-
-                                        if (indiceNotaria != -1)
+                                        catch
                                         {
-                                            string[] subsegmentos = segmentos.Skip(indiceNotaria).ToArray();
-                                            destino = Path.Combine(baseServidor, Path.Combine(subsegmentos));
+                                            lock (lockObj)
+                                            {
+                                                errores++;
+                                            }
                                         }
-                                        else
+                                        finally
                                         {
-                                            string nombreArchivo = Path.GetFileName(rutaArchivo);
-                                            destino = Path.Combine(baseServidor, "General", nombreArchivo);
+                                            // Actualizar progreso en la UI
+                                            frmProgreso.Invoke((MethodInvoker)delegate
+                                            {
+                                                int completados = copiados + errores;
+                                                if (completados <= barProgreso.Maximum)
+                                                {
+                                                    barProgreso.Value = completados;
+                                                }
+                                                lblProgreso.Text = string.Format("Subiendo archivo {0} de {1}...", completados, archivosPdf.Length);
+                                            });
+
+                                            semaforo.Release();
                                         }
-
-                                        string carpetaDestino = Path.GetDirectoryName(destino) ?? "";
-                                        if (!Directory.Exists(carpetaDestino))
-                                        {
-                                            Directory.CreateDirectory(carpetaDestino);
-                                        }
-
-                                        // Copiar archivo
-                                        File.Copy(rutaArchivo, destino, true);
-
-                                        // Si el usuario eligió borrar locales
-                                        if (borrarLocales)
-                                        {
-                                            try { File.Delete(rutaArchivo); } catch { }
-                                        }
-
-                                        copiados++;
-                                        archivosExitosos.Add(Path.GetFileName(rutaArchivo));
-                                    }
-                                    catch (Exception exCopy)
-                                    {
-                                        errores++;
-                                        System.Diagnostics.Debug.WriteLine("Error al copiar: " + exCopy.Message);
-                                    }
-
-                                    // Actualizar UI
-                                    frmProgreso.Invoke((MethodInvoker)delegate
-                                    {
-                                        int completados = copiados + errores;
-                                        if (completados <= barProgreso.Maximum)
-                                        {
-                                            barProgreso.Value = completados;
-                                        }
-                                        lblProgreso.Text = string.Format("Copiando archivo {0} de {1}...", completados, archivosPdf.Length);
                                     });
+
+                                    System.Threading.Tasks.Task.WhenAll(tareas).GetAwaiter().GetResult();
                                 }
 
                                 if (archivosExitosos.Count > 0)
@@ -671,11 +732,16 @@ namespace CapturaNotarias
                                 frmProgreso.Invoke((MethodInvoker)delegate
                                 {
                                     frmProgreso.Close();
+                                    string msgResultado = string.Format("Transferencia finalizada.\n\n• Archivos subidos: {0}\n• Errores/Fallidos: {1}", copiados, errores);
+                                    if (errores > 0)
+                                    {
+                                        msgResultado += string.Format("\n\nDetalle del último error:\n{0}", ModuloAuditoria.UltimoErrorSubidaPdf);
+                                    }
                                     MessageBox.Show(
-                                        string.Format("Transferencia finalizada.\n\n• Archivos copiados: {0}\n• Errores/Omitidos: {1}", copiados, errores),
+                                        msgResultado,
                                         "Resultado de Transferencia",
                                         MessageBoxButtons.OK,
-                                        MessageBoxIcon.Information);
+                                        errores > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
                                 });
                             });
                 }

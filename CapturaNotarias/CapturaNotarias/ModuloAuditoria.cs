@@ -73,6 +73,12 @@ namespace CapturaNotarias
         
         public long Id { get; set; }
 
+        [JsonProperty("exportado")]
+        public int Exportado { get; set; }
+
+        [JsonProperty("exportado_en")]
+        public string? ExportadoEn { get; set; }
+
         [JsonIgnore]
         public string? RutaJsonOrigen { get; set; }
     }
@@ -85,6 +91,7 @@ namespace CapturaNotarias
     public static class ModuloAuditoria
     {
         public static string UltimoErrorHttp = "Ninguno";
+        public static string UltimoErrorSubidaPdf = "Ninguno";
         public static int UltimosNuevosRegistrados = 0;
         public static int UltimosDuplicadosOmitidos = 0;
         private static readonly object _lockJson = new object();
@@ -495,6 +502,70 @@ namespace CapturaNotarias
                 .ToList();
         }
 
+
+
+        // Obtiene la fecha de reporte adaptando el turno nocturno
+        public static string ObtenerFechaReporte(RegistroAuditoria r)
+        {
+            if (string.IsNullOrEmpty(r.FechaHora) || r.FechaHora.Length < 10)
+            {
+                return "Sin Fecha";
+            }
+
+            string fechaStr = r.FechaHora.Substring(0, 10);
+
+            // Si es del turno nocturno y se capturó antes de las 6:00 AM, pertenece al día anterior
+            if (!string.IsNullOrEmpty(r.Turno) && 
+                r.Turno.Equals("Nocturno", StringComparison.OrdinalIgnoreCase))
+            {
+                if (DateTime.TryParse(r.FechaHora, out DateTime dt))
+                {
+                    if (dt.Hour < 6)
+                    {
+                        return dt.AddDays(-1).ToString("yyyy-MM-dd");
+                    }
+                }
+            }
+
+            return fechaStr;
+        }
+
+        // Intenta resolver la ruta física de un archivo buscando en la ruta local y en candidatos alternativos de red
+        private static string ResolverRutaFisica(string rutaOriginal, string archivoOriginal, string notaria, string tipoCaptura)
+        {
+            if (string.IsNullOrEmpty(rutaOriginal)) return "";
+            if (File.Exists(rutaOriginal)) return rutaOriginal;
+
+            // Extraer la ruta relativa quitando la letra de la unidad (ej. C:\NOTARIAS\notaria -> \NOTARIAS\notaria)
+            string relativa = rutaOriginal;
+            var coincidencia = System.Text.RegularExpressions.Regex.Match(rutaOriginal, @"^[a-zA-Z]:(.*)$");
+            if (coincidencia.Success)
+            {
+                relativa = coincidencia.Groups[1].Value;
+            }
+
+            // Rutas candidatas de red y discos locales
+            string[] candidatos = new string[]
+            {
+                "C:\\NOTARIAS" + relativa,
+                "\\\\172.40.5.84\\ssdirec" + relativa,
+                Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "ssdirec", tipoCaptura, notaria, archivoOriginal),
+                Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, tipoCaptura, notaria, archivoOriginal),
+                Path.Combine("C:\\", tipoCaptura, notaria, archivoOriginal)
+            };
+
+            foreach (var c in candidatos)
+            {
+                try
+                {
+                    if (File.Exists(c)) return c;
+                }
+                catch { }
+            }
+
+            return "";
+        }
+
         public static void ExportarExcel(List<RegistroAuditoria> datos)
         {
             // Función local para asegurar que no excedamos el límite de caracteres de Excel (32,767)
@@ -502,32 +573,6 @@ namespace CapturaNotarias
             {
                 if (string.IsNullOrEmpty(texto)) return "";
                 return texto.Length > 32760 ? texto.Substring(0, 32760) + "..." : texto;
-            }
-
-            // Función local para obtener la fecha de reporte adaptando el turno nocturno
-            string ObtenerFechaReporte(RegistroAuditoria r)
-            {
-                if (string.IsNullOrEmpty(r.FechaHora) || r.FechaHora.Length < 10)
-                {
-                    return "Sin Fecha";
-                }
-
-                string fechaStr = r.FechaHora.Substring(0, 10);
-
-                // Si es del turno nocturno y se capturó antes de las 6:00 AM, pertenece al día anterior
-                if (!string.IsNullOrEmpty(r.Turno) && 
-                    r.Turno.Equals("Nocturno", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (DateTime.TryParse(r.FechaHora, out DateTime dt))
-                    {
-                        if (dt.Hour < 6)
-                        {
-                            return dt.AddDays(-1).ToString("yyyy-MM-dd");
-                        }
-                    }
-                }
-
-                return fechaStr;
             }
 
             if (datos == null || datos.Count == 0)
@@ -540,20 +585,17 @@ namespace CapturaNotarias
             // para obtener las páginas actualizadas por las PCs cliente
             try { MigrarJsonHistoricosASqlite(); } catch { }
 
-            // Recargar los datos desde la BD con la información actualizada
-            datos = ObtenerRegistrosTodos();
-
-            // Si aún quedan registros con paginas=0, contar de forma síncrona
-            // (el servidor tiene acceso a los archivos en la carpeta compartida)
-            var pendientes = datos.Where(r => r.Paginas == 0 && !string.IsNullOrEmpty(r.RutaLocal)).ToList();
+            // Si hay registros con paginas <= 1, intentar recontar físicamente buscando en red
+            var pendientes = datos.Where(r => r.Paginas <= 1).ToList();
             foreach (var reg in pendientes)
             {
                 try
                 {
-                    if (File.Exists(reg.RutaLocal))
+                    string rutaFisica = ResolverRutaFisica(reg.RutaLocal ?? "", reg.ArchivoOriginal ?? "", reg.Notaria ?? "", reg.LugarTrabajo ?? "IREC");
+                    if (!string.IsNullOrEmpty(rutaFisica))
                     {
-                        int pags = ServicioContadorPaginas.ContarPaginasSincrono(reg.RutaLocal!);
-                        if (pags > 0)
+                        int pags = ServicioContadorPaginas.ContarPaginasSincrono(rutaFisica);
+                        if (pags > 0 && pags != reg.Paginas)
                         {
                             reg.Paginas = pags;
                             RepositorioAuditoria.ActualizarPaginas(reg.Id, pags);
@@ -1026,6 +1068,63 @@ namespace CapturaNotarias
 
             return rutaLimpia.Trim('\\', '/');
         }
+
+        /// <summary>
+        /// Sube un archivo PDF individual al servidor central de Laravel mediante una petición Multipart HTTP POST.
+        /// </summary>
+        public static async Task<bool> SubirPdfAlServidorHttpAsync(System.Net.Http.HttpClient client, string rutaLocal, string archivoOriginal, string tipoCaptura, string notaria)
+        {
+            try
+            {
+                if (!System.IO.File.Exists(rutaLocal)) return false;
+
+                using (var content = new System.Net.Http.MultipartFormDataContent())
+                {
+                    // Leer el archivo de forma asíncrona
+                    byte[] fileBytes;
+                    using (var fs = new System.IO.FileStream(rutaLocal, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.Read, 4096, true))
+                    {
+                        fileBytes = new byte[fs.Length];
+                        await fs.ReadAsync(fileBytes, 0, fileBytes.Length).ConfigureAwait(false);
+                    }
+
+                    var streamContent = new System.Net.Http.ByteArrayContent(fileBytes);
+                    streamContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/pdf");
+                    
+                    content.Add(streamContent, "archivo", archivoOriginal);
+                    content.Add(new System.Net.Http.StringContent(tipoCaptura), "tipo_captura");
+                    content.Add(new System.Net.Http.StringContent(notaria ?? "General"), "notaria");
+                    content.Add(new System.Net.Http.StringContent(archivoOriginal), "archivo_original");
+
+                    string urlSubida = ModuloConfiguracion.UrlApi.Replace("/registrar", "/subir-pdf");
+                    var response = await client.PostAsync(urlSubida, content).ConfigureAwait(false);
+                    
+                    if (response.IsSuccessStatusCode)
+                    {
+                        return true;
+                    }
+                    else
+                    {
+                        string responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                        UltimoErrorSubidaPdf = string.Format("HTTP {0} ({1}): {2}", (int)response.StatusCode, response.StatusCode.ToString(), responseBody);
+                        System.Diagnostics.Debug.WriteLine(string.Format("Fallo al subir PDF {0}: {1}", archivoOriginal, UltimoErrorSubidaPdf));
+                        return false;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                var inner = ex;
+                while (inner.InnerException != null)
+                {
+                    inner = inner.InnerException;
+                }
+                UltimoErrorSubidaPdf = string.Format("Excepción: {0} (Raíz: {1})", ex.Message, inner.Message);
+                System.Diagnostics.Debug.WriteLine(string.Format("Excepción al subir PDF {0}: {1}", archivoOriginal, UltimoErrorSubidaPdf));
+                return false;
+            }
+        }
+
         public static void EnviarAuditoriasAlServidorCentral(bool silencioso = false, bool soloRegistros = false, bool soloArchivos = false)
         {
             // Si es en segundo plano (silencioso), respetamos la opción de desactivado
@@ -1187,191 +1286,127 @@ namespace CapturaNotarias
                 }
                 else
                 {
-                    int indice = 0;
-                    foreach (var log in registrosPendientes)
+                    // Subida de archivos PDF concurrente por HTTP POST en paralelo
+                    var logsCopiaExito = new System.Collections.Generic.List<RegistroAuditoria>();
+                    int totalArchivos = registrosPendientes.Count;
+                    int archivosProcesados = 0;
+                    object lockLogs = new object();
+
+                    using (var semaforo = new System.Threading.SemaphoreSlim(4)) // Límite de 4 subidas simultáneas
+                    using (var httpClient = new System.Net.Http.HttpClient())
                     {
-                        indice++;
-                        if (!silencioso)
+                        httpClient.Timeout = TimeSpan.FromMinutes(5); // Tiempo de espera amplio para PDFs pesados
+
+                        var tareas = registrosPendientes.Select(async log =>
                         {
-                            ejecutarEnUI(() =>
+                            await semaforo.WaitAsync().ConfigureAwait(false);
+                            try
                             {
-                                if (etiquetaProgreso != null)
-                                    etiquetaProgreso.Text = string.Format("Copiando archivo {0} de {1}...", indice, registrosPendientes.Count);
-                                if (barraArchivos != null)
-                                    barraArchivos.Value = indice;
-                                if (formularioProgreso != null)
-                                    formularioProgreso.Refresh();
-                            });
-                        }
-
-                        string rutaLocal = log.RutaLocal ?? "";
-                        if (string.IsNullOrEmpty(rutaLocal))
-                        {
-                            if (log.Detalles != null && log.Detalles.StartsWith("PDF Escaneado en ", StringComparison.OrdinalIgnoreCase))
-                            {
-                                rutaLocal = log.Detalles.Substring("PDF Escaneado en ".Length);
-                            }
-                        }
-
-                        if (string.IsNullOrEmpty(rutaLocal) && !string.IsNullOrEmpty(ultimaRuta))
-                        {
-                            rutaLocal = Path.Combine(ultimaRuta, log.ArchivoOriginal ?? "");
-                        }
-
-                        // El servidor de destino central real (VPN) para guardar los PDFs
-                        string baseServidor = Path.Combine(@"\\172.40.5.84\ssdirec", ModuloConfiguracion.TipoCaptura);
-
-                        // El servidor local del escáner (de donde obtenemos los archivos originales)
-                        string rutaAuditoriaLocal = !string.IsNullOrEmpty(ModuloConfiguracion.RutaServidorAuditoria)
-                            ? ModuloConfiguracion.RutaServidorAuditoria
-                            : @"\\192.168.1.10\" + ModuloConfiguracion.TipoCaptura;
-
-                        // Construir el destino final limpio conservando la estructura de carpetas (ej. NOTARIA 53\VOLUMEN 24)
-                        string destinoArchivo = "";
-                        if (!string.IsNullOrEmpty(rutaLocal) && rutaLocal.Length >= 3 && rutaLocal[1] == ':' && rutaLocal[2] == '\\')
-                        {
-                            string rutaSinUnidad = rutaLocal.Substring(3);
-                            string folderBase = Path.GetFileName(baseServidor);
-                            string[] segmentos = rutaSinUnidad.Split('\\');
-                            string primerSegmento = segmentos.Length > 0 ? segmentos[0] : "";
-
-                            if (string.Equals(folderBase, primerSegmento, StringComparison.OrdinalIgnoreCase))
-                            {
-                                string subrutaLimpia = string.Join("\\", segmentos, 1, segmentos.Length - 1);
-                                destinoArchivo = Path.Combine(baseServidor, subrutaLimpia);
-                            }
-                            else
-                            {
-                                destinoArchivo = Path.Combine(baseServidor, rutaSinUnidad);
-                            }
-                        }
-                        else
-                        {
-                            string destinoCarpeta = Path.Combine(baseServidor, log.Notaria ?? "General");
-                            destinoArchivo = !string.IsNullOrEmpty(log.ArchivoOriginal) ? Path.Combine(destinoCarpeta, log.ArchivoOriginal) : "";
-                        }
-
-                        // Resolver la ruta local de origen (rutaLocalResolved) usando la ruta local del escáner (rutaAuditoriaLocal)
-                        // si estamos en el servidor y la ruta tiene una unidad mapeada (como Z:\) que el servidor no puede acceder directamente.
-                        string rutaLocalResolved = rutaLocal;
-                        bool existeLocal = !string.IsNullOrEmpty(rutaLocalResolved) && File.Exists(rutaLocalResolved);
-
-                        if (!existeLocal && !string.IsNullOrEmpty(rutaLocal) && rutaLocal.Length >= 3 && rutaLocal[1] == ':' && rutaLocal[2] == '\\')
-                        {
-                            string rutaSinUnidad = rutaLocal.Substring(3);
-
-                            // Posibilidad A: Carpeta con segmento duplicado usando la ruta de origen local (ej. Z:\NOTARIAS\NOTARIA 53... -> C:\NOTARIAS\NOTARIAS\NOTARIA 53...)
-                            string rutaA = Path.Combine(rutaAuditoriaLocal, rutaSinUnidad);
-
-                            // Posibilidad B: Carpeta sin duplicar segmento usando la ruta de origen local (ej. C:\NOTARIAS\NOTARIA 53...)
-                            string folderBase = Path.GetFileName(rutaAuditoriaLocal);
-                            string[] segmentos = rutaSinUnidad.Split('\\');
-                            string primerSegmento = segmentos.Length > 0 ? segmentos[0] : "";
-                            string rutaB = "";
-                            
-                            if (string.Equals(folderBase, primerSegmento, StringComparison.OrdinalIgnoreCase))
-                            {
-                                string subrutaLimpia = string.Join("\\", segmentos, 1, segmentos.Length - 1);
-                                rutaB = Path.Combine(rutaAuditoriaLocal, subrutaLimpia);
-                            }
-                            else
-                            {
-                                string parentBase = Path.GetDirectoryName(rutaAuditoriaLocal) ?? "";
-                                if (!string.IsNullOrEmpty(parentBase))
+                                string rutaLocal = log.RutaLocal ?? "";
+                                if (string.IsNullOrEmpty(rutaLocal))
                                 {
-                                    rutaB = Path.Combine(parentBase, rutaSinUnidad);
-                                }
-                            }
-
-                            if (File.Exists(rutaA))
-                            {
-                                rutaLocalResolved = rutaA;
-                                existeLocal = true;
-                            }
-                            else if (!string.IsNullOrEmpty(rutaB) && File.Exists(rutaB))
-                            {
-                                rutaLocalResolved = rutaB;
-                                existeLocal = true;
-                            }
-                        }
-
-                        bool existeDestino = !string.IsNullOrEmpty(destinoArchivo) && File.Exists(destinoArchivo);
-
-                        // Si origen y destino coinciden físicamente, consideramos que el archivo ya está en el destino.
-                        if (existeLocal && !string.IsNullOrEmpty(destinoArchivo) && string.Equals(Path.GetFullPath(rutaLocalResolved), Path.GetFullPath(destinoArchivo), StringComparison.OrdinalIgnoreCase))
-                        {
-                            existeDestino = true;
-                        }
-
-                        // Determinar si es captura de PDF o un log sin archivo (Login, Logout, etc.)
-                        bool esCaptura = !string.IsNullOrEmpty(log.ArchivoOriginal);
-
-                        if (esCaptura)
-                        {
-                            if (existeDestino)
-                            {
-                                // El archivo ya está en el servidor de destino (copiado previamente o guardado directo en red)
-                                logsAEnviar.Add(log);
-                            }
-                            else if (existeLocal)
-                            {
-                                // El archivo está local en esta PC y no se ha copiado al servidor aún
-                                try
-                                {
-                                    string destinoCarpeta = Path.GetDirectoryName(destinoArchivo) ?? "";
-                                    if (!Directory.Exists(destinoCarpeta))
+                                    if (log.Detalles != null && log.Detalles.StartsWith("PDF Escaneado en ", StringComparison.OrdinalIgnoreCase))
                                     {
-                                        Directory.CreateDirectory(destinoCarpeta);
+                                        rutaLocal = log.Detalles.Substring("PDF Escaneado en ".Length);
                                     }
-
-                                    // Copiar el archivo al servidor central
-                                    File.Copy(rutaLocalResolved, destinoArchivo, true);
-
-                                    // Si se copió con éxito, intentar borrarlo localmente
-                                    try
-                                    {
-                                        File.Delete(rutaLocalResolved);
-                                    }
-                                    catch (Exception exDel)
-                                    {
-                                        System.Diagnostics.Debug.WriteLine("No se pudo eliminar el archivo local: " + exDel.Message);
-                                    }
-
-                                    logsAEnviar.Add(log);
                                 }
-                                catch (Exception exCopy)
-                                {
-                                    System.Diagnostics.Debug.WriteLine("Error al copiar archivo a ssdirec: " + exCopy.Message);
-                                    huboErroresDeCopia = true;
-                                }
-                            }
-                            else
-                            {
-                                // No existe ni localmente ni en el destino.
-                                // ¿Este registro pertenece a esta PC?
-                                string pcActual = string.IsNullOrEmpty(ModuloConfiguracion.NombrePC) ? Environment.MachineName : ModuloConfiguracion.NombrePC;
-                                bool esDeEstaPC = string.Equals(log.PC, pcActual, StringComparison.OrdinalIgnoreCase);
 
-                                if (esDeEstaPC)
+                                if (string.IsNullOrEmpty(rutaLocal) && !string.IsNullOrEmpty(ultimaRuta))
                                 {
-                                    // Si es de esta PC y no existe en ningún lado, se asume perdido/borrado manual.
-                                    // Se agrega para no dejar el registro trabado.
-                                    logsAEnviar.Add(log);
+                                    rutaLocal = Path.Combine(ultimaRuta, log.ArchivoOriginal ?? "");
+                                }
+
+                                // Resolver la ruta física del archivo (disco local o red)
+                                string rutaLocalResolved = ResolverRutaFisica(rutaLocal, log.ArchivoOriginal ?? "", log.Notaria ?? "", ModuloConfiguracion.TipoCaptura);
+                                bool existeLocal = !string.IsNullOrEmpty(rutaLocalResolved) && File.Exists(rutaLocalResolved);
+                                bool esCaptura = !string.IsNullOrEmpty(log.ArchivoOriginal);
+
+                                if (esCaptura)
+                                {
+                                    if (existeLocal)
+                                    {
+                                        // Subir el PDF directamente al servidor central por HTTP POST
+                                        bool subidaExito = await SubirPdfAlServidorHttpAsync(
+                                            httpClient,
+                                            rutaLocalResolved,
+                                            log.ArchivoOriginal ?? "",
+                                            ModuloConfiguracion.TipoCaptura,
+                                            log.Notaria ?? "General"
+                                        ).ConfigureAwait(false);
+
+                                        if (subidaExito)
+                                        {
+                                            lock (lockLogs)
+                                            {
+                                                logsCopiaExito.Add(log);
+                                            }
+
+                                            // Si la subida fue exitosa, intentar eliminar el archivo local
+                                            try
+                                            {
+                                                File.Delete(rutaLocalResolved);
+                                            }
+                                            catch { }
+                                        }
+                                        else
+                                        {
+                                            huboErroresDeCopia = true;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // No existe localmente.
+                                        string pcActual = string.IsNullOrEmpty(ModuloConfiguracion.NombrePC) ? Environment.MachineName : ModuloConfiguracion.NombrePC;
+                                        bool esDeEstaPC = string.Equals(log.PC, pcActual, StringComparison.OrdinalIgnoreCase);
+
+                                        if (esDeEstaPC)
+                                        {
+                                            // Se asume perdido y se agrega para no dejar el registro trabado
+                                            lock (lockLogs)
+                                            {
+                                                logsCopiaExito.Add(log);
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // Si pertenece a otra máquina, esa máquina se encargará de subir su archivo
+                                            System.Diagnostics.Debug.WriteLine(string.Format("El archivo {0} de la PC {1} no se localiza en esta máquina. Se pospone.", log.ArchivoOriginal, log.PC));
+                                        }
+                                    }
                                 }
                                 else
                                 {
-                                    // Si es de otra PC, significa que la otra PC no ha copiado su archivo a ssdirec todavía.
-                                    // NO lo agregamos a logsAEnviar para que no se marque como enviado y podamos esperar a que la otra PC lo suba.
-                                    System.Diagnostics.Debug.WriteLine(string.Format("El archivo {0} de la PC {1} aún no existe en ssdirec. Se pospone envío.", log.ArchivoOriginal, log.PC));
+                                    // Registros que no son capturas (ej. Login/Logout/etc.)
+                                    lock (lockLogs)
+                                    {
+                                        logsCopiaExito.Add(log);
+                                    }
                                 }
                             }
-                        }
-                        else
-                        {
-                            // Registros sin archivo (ej. Login/Logout/etc.)
-                            logsAEnviar.Add(log);
-                        }
+                            finally
+                            {
+                                int actual = System.Threading.Interlocked.Increment(ref archivosProcesados);
+                                if (!silencioso)
+                                {
+                                    ejecutarEnUI(() =>
+                                    {
+                                        if (etiquetaProgreso != null)
+                                            etiquetaProgreso.Text = string.Format("Subiendo archivo {0} de {1}...", actual, totalArchivos);
+                                        if (barraArchivos != null)
+                                            barraArchivos.Value = actual;
+                                        if (formularioProgreso != null)
+                                            formularioProgreso.Refresh();
+                                    });
+                                }
+                                semaforo.Release();
+                            }
+                        });
+
+                        // Esperar a que todas las subidas asíncronas concurrentes finalicen de forma síncrona
+                        System.Threading.Tasks.Task.WhenAll(tareas).GetAwaiter().GetResult();
                     }
+
+                    logsAEnviar.AddRange(logsCopiaExito);
                 }
 
                 if (logsAEnviar.Count == 0)

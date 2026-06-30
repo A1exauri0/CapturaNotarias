@@ -147,6 +147,8 @@ namespace CapturaNotarias
             if (dgvAuditoria.Columns.Contains("RutaJsonOrigen")) dgvAuditoria.Columns["RutaJsonOrigen"].Visible = false;
             if (dgvAuditoria.Columns.Contains("Enviado")) dgvAuditoria.Columns["Enviado"].Visible = false;
             if (dgvAuditoria.Columns.Contains("LugarTrabajo")) dgvAuditoria.Columns["LugarTrabajo"].Visible = false;
+            if (dgvAuditoria.Columns.Contains("Exportado")) dgvAuditoria.Columns["Exportado"].Visible = false;
+            if (dgvAuditoria.Columns.Contains("ExportadoEn")) dgvAuditoria.Columns["ExportadoEn"].Visible = false;
 
             dgvAuditoria.AutoResizeColumns();
         }
