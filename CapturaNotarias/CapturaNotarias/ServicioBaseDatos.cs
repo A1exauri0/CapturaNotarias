@@ -84,7 +84,8 @@ namespace CapturaNotarias
                             lugar_trabajo     TEXT,
                             enviado           INTEGER DEFAULT 0,
                             exportado_red     INTEGER DEFAULT 0,
-                            ruta_local        TEXT
+                            ruta_local        TEXT,
+                            exportado_en      TEXT
                         );
 
                         CREATE INDEX IF NOT EXISTS idx_fecha 
@@ -102,6 +103,28 @@ namespace CapturaNotarias
                             WHERE accion = 'Capturado';
                     ";
                     cmd.ExecuteNonQuery();
+
+                    // Intentar agregar la columna exportado_en si la base de datos ya existía previamente
+                    try
+                    {
+                        using (var cmdAlter = conexion.CreateCommand())
+                        {
+                            cmdAlter.CommandText = "ALTER TABLE registros_auditoria ADD COLUMN exportado_en TEXT;";
+                            cmdAlter.ExecuteNonQuery();
+                        }
+                    }
+                    catch { }
+
+                    // Rellenar retroactivamente exportado_en usando la fecha_hora para registros ya exportados históricamente
+                    try
+                    {
+                        using (var cmdUpdate = conexion.CreateCommand())
+                        {
+                            cmdUpdate.CommandText = "UPDATE registros_auditoria SET exportado_en = fecha_hora WHERE exportado_red = 1 AND (exportado_en IS NULL OR exportado_en = '');";
+                            cmdUpdate.ExecuteNonQuery();
+                        }
+                    }
+                    catch { }
                 }
 
                 _inicializada = true;

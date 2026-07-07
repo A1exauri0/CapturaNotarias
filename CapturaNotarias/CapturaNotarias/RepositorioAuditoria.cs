@@ -166,7 +166,7 @@ namespace CapturaNotarias
                 using (var conexion = ServicioBaseDatos.ObtenerConexion())
                 using (var cmd = conexion.CreateCommand())
                 {
-                    cmd.CommandText = "UPDATE registros_auditoria SET paginas = @paginas, exportado_red = 0 WHERE id = @id";
+                    cmd.CommandText = "UPDATE registros_auditoria SET paginas = @paginas, exportado_red = 0, exportado_en = NULL WHERE id = @id";
                     cmd.Parameters.AddWithValue("@paginas", paginas);
                     cmd.Parameters.AddWithValue("@id", idRegistro);
                     cmd.ExecuteNonQuery();
@@ -211,54 +211,63 @@ namespace CapturaNotarias
         /// Recuenta páginas de todos los registros del día del usuario actual.
         /// Retorna (registros actualizados, total de páginas).
         /// </summary>
-        public static (int actualizados, int totalPaginas) RecontarPaginasDelDia()
+        public static (int actualizados, int totalPaginas) RecontarPaginasDelDia(string? pcAFiltrar = null)
         {
             int actualizados = 0;
             int totalPaginas = 0;
 
             try
             {
-                string hoy = DateTime.Now.ToString("yyyy-MM-dd");
                 string pcNombre = string.IsNullOrEmpty(ModuloConfiguracion.NombrePC)
                     ? Environment.MachineName : ModuloConfiguracion.NombrePC;
 
-                // Obtener registros del día
-                var registros = new List<(long id, string rutaLocal, int paginasActuales)>();
+                if (!string.IsNullOrEmpty(pcAFiltrar))
+                {
+                    pcNombre = pcAFiltrar;
+                }
+
+                // Obtener todos los registros con paginas <= 1 para la PC o todas
+                var registros = new List<(long id, string rutaLocal, int paginasActuales, string archivoOriginal, string notaria)>();
 
                 using (var conexion = ServicioBaseDatos.ObtenerConexion())
                 {
                     using (var cmdSelect = conexion.CreateCommand())
                     {
-                        cmdSelect.CommandText = @"
-                            SELECT id, ruta_local, paginas FROM registros_auditoria
-                            WHERE fecha = @fecha AND pc = @pc AND usuario = @usuario AND accion = 'Capturado'";
-                        cmdSelect.Parameters.AddWithValue("@fecha", hoy);
-                        cmdSelect.Parameters.AddWithValue("@pc", pcNombre);
-                        cmdSelect.Parameters.AddWithValue("@usuario", ModuloConfiguracion.UsuarioActual);
+                        if (pcNombre == "Todas")
+                        {
+                            cmdSelect.CommandText = @"
+                                SELECT id, ruta_local, paginas, archivo_original, notaria FROM registros_auditoria
+                                WHERE (paginas <= 1 OR paginas IS NULL)";
+                        }
+                        else
+                        {
+                            cmdSelect.CommandText = @"
+                                SELECT id, ruta_local, paginas, archivo_original, notaria FROM registros_auditoria
+                                WHERE pc = @pc AND (paginas <= 1 OR paginas IS NULL)";
+                            cmdSelect.Parameters.AddWithValue("@pc", pcNombre);
+                        }
 
                         using (var lector = cmdSelect.ExecuteReader())
                         {
                             while (lector.Read())
                             {
                                 string ruta = lector.IsDBNull(1) ? "" : lector.GetString(1);
-                                registros.Add((lector.GetInt64(0), ruta, lector.GetInt32(2)));
+                                int pags = lector.IsDBNull(2) ? 0 : lector.GetInt32(2);
+                                string archivo = lector.IsDBNull(3) ? "" : lector.GetString(3);
+                                string not = lector.IsDBNull(4) ? "" : lector.GetString(4);
+                                registros.Add((lector.GetInt64(0), ruta, pags, archivo, not));
                             }
                         }
                     }
 
-                    // Recontar cada uno
-                    foreach (var (id, rutaLocal, paginasActuales) in registros)
+                    // Recontar cada uno resolviendo la ruta robustamente (tal como lo hace el script de PowerShell)
+                    foreach (var (id, rutaLocal, paginasActuales, archivoOriginal, notaria) in registros)
                     {
-                        // Si ya tiene páginas registradas (> 0), saltar el conteo físico para optimizar velocidad
-                        if (paginasActuales > 0)
-                        {
-                            totalPaginas += paginasActuales;
-                            continue;
-                        }
+                        string rutaReal = ModuloAuditoria.ResolverRutaFisica(rutaLocal, archivoOriginal, notaria, ModuloConfiguracion.TipoCaptura);
 
-                        if (!string.IsNullOrEmpty(rutaLocal) && File.Exists(rutaLocal))
+                        if (!string.IsNullOrEmpty(rutaReal) && File.Exists(rutaReal))
                         {
-                            int paginasNuevas = ServicioContadorPaginas.ContarPaginasSincrono(rutaLocal);
+                            int paginasNuevas = ServicioContadorPaginas.ContarPaginasSincrono(rutaReal);
                             if (paginasNuevas > 0 && paginasNuevas != paginasActuales)
                             {
                                 ActualizarPaginas(id, paginasNuevas);
@@ -416,8 +425,10 @@ namespace CapturaNotarias
                 {
                     using (var cmd = conexion.CreateCommand())
                     {
-                        cmd.CommandText = "UPDATE registros_auditoria SET exportado_red = 1 WHERE id = @id";
-                        var paramId = cmd.Parameters.Add("@id", SqliteType.Integer);
+                        cmd.CommandText = "UPDATE registros_auditoria SET exportado_red = 1, exportado_en = @exportado_en WHERE id = @id";
+                        var paramId = cmd.Parameters.Add("@id", Microsoft.Data.Sqlite.SqliteType.Integer);
+                        var paramFecha = cmd.Parameters.Add("@exportado_en", Microsoft.Data.Sqlite.SqliteType.Text);
+                        paramFecha.Value = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 
                         foreach (var id in ids)
                         {
@@ -442,7 +453,8 @@ namespace CapturaNotarias
                 using (var conexion = ServicioBaseDatos.ObtenerConexion())
                 using (var cmd = conexion.CreateCommand())
                 {
-                    cmd.CommandText = "UPDATE registros_auditoria SET exportado_red = 1 WHERE exportado_red = 0";
+                    cmd.CommandText = "UPDATE registros_auditoria SET exportado_red = 1, exportado_en = @exportado_en WHERE exportado_red = 0";
+                    cmd.Parameters.AddWithValue("@exportado_en", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
                     cmd.ExecuteNonQuery();
                 }
             }
@@ -672,8 +684,10 @@ namespace CapturaNotarias
                 {
                     using (var cmd = conexion.CreateCommand())
                     {
-                        cmd.CommandText = "UPDATE registros_auditoria SET exportado_red = 1 WHERE archivo_original = @archivo";
-                        var pArchivo = cmd.Parameters.Add("@archivo", SqliteType.Text);
+                        cmd.CommandText = "UPDATE registros_auditoria SET exportado_red = 1, exportado_en = @exportado_en WHERE archivo_original = @archivo";
+                        var pArchivo = cmd.Parameters.Add("@archivo", Microsoft.Data.Sqlite.SqliteType.Text);
+                        var pFecha = cmd.Parameters.Add("@exportado_en", Microsoft.Data.Sqlite.SqliteType.Text);
+                        pFecha.Value = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 
                         foreach (var archivo in nombresArchivos)
                         {
@@ -805,8 +819,105 @@ namespace CapturaNotarias
                 Enviado = !lector.IsDBNull(lector.GetOrdinal("enviado")) && lector.GetInt32(lector.GetOrdinal("enviado")) == 1,
                 RutaLocal = lector.IsDBNull(lector.GetOrdinal("ruta_local")) ? null : lector.GetString(lector.GetOrdinal("ruta_local")),
                 Exportado = lector.IsDBNull(lector.GetOrdinal("exportado_red")) ? 0 : lector.GetInt32(lector.GetOrdinal("exportado_red")),
-                ExportadoEn = null,
+                ExportadoEn = lector.IsDBNull(lector.GetOrdinal("exportado_en")) ? null : lector.GetString(lector.GetOrdinal("exportado_en")),
             };
+        }
+
+        public static (int pdfs, int imagenes) ConsultarProductividadUsuario(string busqueda, string fecha)
+        {
+            int pdfs = 0;
+            int imagenes = 0;
+
+            try
+            {
+                using (var conexion = ServicioBaseDatos.ObtenerConexion())
+                {
+                    using (var cmd = conexion.CreateCommand())
+                    {
+                        cmd.CommandText = @"
+                            SELECT COUNT(*) AS total_pdfs, COALESCE(SUM(paginas), 0) AS total_imagenes
+                            FROM registros_auditoria
+                            WHERE (usuario LIKE @busqueda OR nombre_completo LIKE @busqueda)
+                              AND fecha = @fecha";
+                        
+                        cmd.Parameters.AddWithValue("@busqueda", "%" + busqueda + "%");
+                        cmd.Parameters.AddWithValue("@fecha", fecha);
+
+                        using (var lector = cmd.ExecuteReader())
+                        {
+                            if (lector.Read())
+                            {
+                                pdfs = lector.GetInt32(0);
+                                imagenes = lector.GetInt32(1);
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            return (pdfs, imagenes);
+        }
+
+        public static List<string> ObtenerUsuariosUnicos()
+        {
+            var usuarios = new List<string>();
+            try
+            {
+                using (var conexion = ServicioBaseDatos.ObtenerConexion())
+                {
+                    using (var cmd = conexion.CreateCommand())
+                    {
+                        cmd.CommandText = @"
+                            SELECT DISTINCT COALESCE(nombre_completo, usuario) FROM registros_auditoria
+                            WHERE (nombre_completo IS NOT NULL AND nombre_completo != '')
+                               OR (usuario IS NOT NULL AND usuario != '')
+                            ORDER BY 1 ASC";
+
+                        using (var lector = cmd.ExecuteReader())
+                        {
+                            while (lector.Read())
+                            {
+                                string u = lector.GetString(0);
+                                if (!usuarios.Contains(u))
+                                {
+                                    usuarios.Add(u);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+            return usuarios;
+        }
+
+        public static List<string> ObtenerPcsUnicas()
+        {
+            var pcs = new List<string>();
+            try
+            {
+                using (var conexion = ServicioBaseDatos.ObtenerConexion())
+                {
+                    using (var cmd = conexion.CreateCommand())
+                    {
+                        cmd.CommandText = @"
+                            SELECT DISTINCT pc FROM registros_auditoria
+                            WHERE pc IS NOT NULL AND pc != ''
+                            ORDER BY pc ASC";
+
+                        using (var lector = cmd.ExecuteReader())
+                        {
+                            while (lector.Read())
+                            {
+                                pcs.Add(lector.GetString(0));
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+            return pcs;
         }
     }
 }

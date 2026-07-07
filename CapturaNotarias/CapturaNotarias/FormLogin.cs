@@ -55,6 +55,8 @@ namespace CapturaNotarias
             ToolStripMenuItem itemEnviarPDFs = new ToolStripMenuItem("📁 Transferir Archivos PDF al Servidor Central...");
             ToolStripMenuItem itemLugarTrabajo = new ToolStripMenuItem("📍 Cambiar Lugar de Trabajo...");
             ToolStripMenuItem itemMigrarHistoricos = new ToolStripMenuItem("🔄 Importar/Verificar JSONs a Base de Datos...");
+            ToolStripMenuItem itemConsultaProductividad = new ToolStripMenuItem("🔎 Consultar Productividad por Usuario...");
+            ToolStripMenuItem itemRepararPaginas = new ToolStripMenuItem("🔄 Reparar Páginas de Capturas");
             
             itemConfigServidor.Click += BtnConfig_Click;
             itemAdminUsuarios.Click += BtnUsuarios_Click;
@@ -64,6 +66,8 @@ namespace CapturaNotarias
             itemEnviarPDFs.Click += ItemEnviarPDFs_Click;
             itemLugarTrabajo.Click += ItemLugarTrabajo_Click;
             itemMigrarHistoricos.Click += ItemMigrarHistoricos_Click;
+            itemConsultaProductividad.Click += ItemConsultaProductividad_Click;
+            itemRepararPaginas.Click += ItemRepararPaginas_Click;
             
             menuConfig.Items.Add(itemConfigServidor);
             menuConfig.Items.Add(itemAdminUsuarios);
@@ -73,6 +77,8 @@ namespace CapturaNotarias
             menuConfig.Items.Add(itemEnviarPDFs);
             menuConfig.Items.Add(itemLugarTrabajo);
             menuConfig.Items.Add(itemMigrarHistoricos);
+            menuConfig.Items.Add(itemConsultaProductividad);
+            menuConfig.Items.Add(itemRepararPaginas);
 
             btnConfig.Click += (s, e) => {
                 menuConfig.Show(btnConfig, new Point(0, btnConfig.Height));
@@ -960,6 +966,55 @@ namespace CapturaNotarias
                     }
                     catch { }
                 });
+            }
+        }
+
+        private void ItemConsultaProductividad_Click(object? sender, EventArgs e)
+        {
+            using (var frm = new FormConsultaProductividad())
+            {
+                frm.ShowDialog();
+            }
+        }
+
+        private void ItemRepararPaginas_Click(object? sender, EventArgs e)
+        {
+            using (var frm = new FormRepararPaginas())
+            {
+                if (frm.ShowDialog() == DialogResult.OK)
+                {
+                    var item = sender as ToolStripMenuItem;
+                    if (item != null) item.Enabled = false;
+
+                    string pcAFiltrar = frm.PcAFiltrar;
+
+                    System.Threading.Tasks.Task.Run(() =>
+                    {
+                        var resultado = ModuloAuditoria.RecontarPaginasDelDia(pcAFiltrar);
+
+                        this.Invoke((MethodInvoker)delegate
+                        {
+                            if (item != null) item.Enabled = true;
+
+                            if (resultado.actualizados > 0)
+                            {
+                                MessageBox.Show(
+                                    string.Format("Proceso de reparación completado con éxito para: {0}\n\n\u2022 Registros corregidos: {1}\n\u2022 Total de páginas procesadas: {2}", pcAFiltrar, resultado.actualizados, resultado.totalPaginas),
+                                    "Reparación Exitosa",
+                                    MessageBoxButtons.OK,
+                                    MessageBoxIcon.Information);
+                            }
+                            else
+                            {
+                                MessageBox.Show(
+                                    string.Format("No se encontraron registros con páginas incorrectas (0 o 1) para corregir en: {0}.", pcAFiltrar),
+                                    "Reparación Completada",
+                                    MessageBoxButtons.OK,
+                                    MessageBoxIcon.Information);
+                            }
+                        });
+                    });
+                }
             }
         }
 

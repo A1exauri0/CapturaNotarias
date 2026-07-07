@@ -284,10 +284,10 @@ namespace CapturaNotarias
         /// de cada PDF desde el archivo físico y actualiza el JSON local y del servidor.
         /// Retorna (registrosActualizados, totalPaginasNuevo).
         /// </summary>
-        public static (int actualizados, int totalPaginas) RecontarPaginasDelDia()
+        public static (int actualizados, int totalPaginas) RecontarPaginasDelDia(string? pcAFiltrar = null)
         {
             // Delega al repositorio SQLite — sin leer/escribir JSON
-            return RepositorioAuditoria.RecontarPaginasDelDia();
+            return RepositorioAuditoria.RecontarPaginasDelDia(pcAFiltrar);
         }
 
         private static bool ExisteDirectorioConTimeout(string ruta, int timeoutMs = 1500)
@@ -531,7 +531,7 @@ namespace CapturaNotarias
         }
 
         // Intenta resolver la ruta física de un archivo buscando en la ruta local y en candidatos alternativos de red
-        private static string ResolverRutaFisica(string rutaOriginal, string archivoOriginal, string notaria, string tipoCaptura)
+        public static string ResolverRutaFisica(string rutaOriginal, string archivoOriginal, string notaria, string tipoCaptura)
         {
             if (string.IsNullOrEmpty(rutaOriginal)) return "";
             if (File.Exists(rutaOriginal)) return rutaOriginal;
@@ -580,6 +580,13 @@ namespace CapturaNotarias
                 MessageBox.Show("No hay datos para exportar.", "Atención", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+
+            // Exportar en este momento los registros de auditoría que faltan subir a la base de datos central
+            try
+            {
+                EnviarAuditoriasAlServidorCentral(silencioso: true, soloRegistros: true);
+            }
+            catch { }
 
             // Re-importar los JSONs más recientes de las carpetas de red
             // para obtener las páginas actualizadas por las PCs cliente
@@ -1157,6 +1164,13 @@ namespace CapturaNotarias
 
             try
             {
+                // Antes de enviar y borrar archivos locales, recontar físicamente los registros con <= 1 páginas
+                try
+                {
+                    RecontarPaginasDelDia();
+                }
+                catch { }
+
                 // Cargar config para fallback de ruta vigilada
                 var config = ModuloConfiguracion.CargarConfiguracion();
                 string ultimaRuta = config?.UltimaRutaVigilada ?? "";
@@ -1341,6 +1355,13 @@ namespace CapturaNotarias
                                                 logsCopiaExito.Add(log);
                                             }
 
+                                            // Actualizar en SQLite local que el archivo ya se exportó a la red/nube
+                                            try
+                                            {
+                                                RepositorioAuditoria.MarcarComoExportadoRed(new System.Collections.Generic.List<long> { log.Id });
+                                            }
+                                            catch { }
+
                                             // Si la subida fue exitosa, intentar eliminar el archivo local
                                             try
                                             {
@@ -1426,117 +1447,9 @@ namespace CapturaNotarias
                     {
                         if (huboErroresDeCopia)
                         {
-                            string detalleRutas = "";
-                            if (registrosPendientes.Count > 0)
-                            {
-                                var primerLog = registrosPendientes[0];
-                                string rutaLoc = primerLog.RutaLocal ?? "";
-                                if (string.IsNullOrEmpty(rutaLoc) && !string.IsNullOrEmpty(ultimaRuta))
-                                {
-                                    rutaLoc = Path.Combine(ultimaRuta, primerLog.ArchivoOriginal ?? "");
-                                }
-
-                                string baseServ = Path.Combine(@"\\172.40.5.84\ssdirec", ModuloConfiguracion.TipoCaptura);
-                                string rutaAudLoc = !string.IsNullOrEmpty(ModuloConfiguracion.RutaServidorAuditoria)
-                                    ? ModuloConfiguracion.RutaServidorAuditoria
-                                    : @"\\192.168.1.10\" + ModuloConfiguracion.TipoCaptura;
-
-                                // Destino
-                                string destArch = "";
-                                if (!string.IsNullOrEmpty(rutaLoc) && rutaLoc.Length >= 3 && rutaLoc[1] == ':' && rutaLoc[2] == '\\')
-                                {
-                                    string rutaSinUnidad = rutaLoc.Substring(3);
-                                    string folderBase = Path.GetFileName(baseServ);
-                                    string[] segmentos = rutaSinUnidad.Split('\\');
-                                    string primerSegmento = segmentos.Length > 0 ? segmentos[0] : "";
-
-                                    if (string.Equals(folderBase, primerSegmento, StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        string subrutaLimpia = string.Join("\\", segmentos, 1, segmentos.Length - 1);
-                                        destArch = Path.Combine(baseServ, subrutaLimpia);
-                                    }
-                                    else
-                                    {
-                                        destArch = Path.Combine(baseServ, rutaSinUnidad);
-                                    }
-                                }
-                                else
-                                {
-                                    string destCarp = Path.Combine(baseServ, primerLog.Notaria ?? "General");
-                                    destArch = !string.IsNullOrEmpty(primerLog.ArchivoOriginal) ? Path.Combine(destCarp, primerLog.ArchivoOriginal) : "";
-                                }
-
-                                // Origen
-                                string rutaLocRes = rutaLoc;
-                                bool existeLoc = !string.IsNullOrEmpty(rutaLocRes) && File.Exists(rutaLocRes);
-                                string rutaA = "";
-                                string rutaB = "";
-
-                                if (!existeLoc && !string.IsNullOrEmpty(rutaLoc) && rutaLoc.Length >= 3 && rutaLoc[1] == ':' && rutaLoc[2] == '\\')
-                                {
-                                    string rutaSinUnidad = rutaLoc.Substring(3);
-                                    rutaA = Path.Combine(rutaAudLoc, rutaSinUnidad);
-
-                                    string folderBase = Path.GetFileName(rutaAudLoc);
-                                    string[] segmentos = rutaSinUnidad.Split('\\');
-                                    string primerSegmento = segmentos.Length > 0 ? segmentos[0] : "";
-                                    
-                                    if (string.Equals(folderBase, primerSegmento, StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        string subrutaLimpia = string.Join("\\", segmentos, 1, segmentos.Length - 1);
-                                        rutaB = Path.Combine(rutaAudLoc, subrutaLimpia);
-                                    }
-                                    else
-                                    {
-                                        string parentBase = Path.GetDirectoryName(rutaAudLoc) ?? "";
-                                        if (!string.IsNullOrEmpty(parentBase))
-                                        {
-                                            rutaB = Path.Combine(parentBase, rutaSinUnidad);
-                                        }
-                                    }
-
-                                    if (File.Exists(rutaA))
-                                    {
-                                        rutaLocRes = rutaA;
-                                        existeLoc = true;
-                                    }
-                                    else if (!string.IsNullOrEmpty(rutaB) && File.Exists(rutaB))
-                                    {
-                                        rutaLocRes = rutaB;
-                                        existeLoc = true;
-                                    }
-                                }
-
-                                bool existeDest = !string.IsNullOrEmpty(destArch) && File.Exists(destArch);
-
-                                detalleRutas = string.Format(
-                                    "\n\nDetalles de búsqueda (primer archivo):\n" +
-                                    "- Archivo original: {0}\n" +
-                                    "- Ruta local en log: {1}\n" +
-                                    "- Carpeta compartida origen: {2}\n" +
-                                    "- Carpeta destino (VPN): {3}\n" +
-                                    "- Origen resuelto: {4}\n" +
-                                    "- Destino resuelto: {5}\n" +
-                                    "- ¿Existe origen?: {6}\n" +
-                                    "- ¿Existe destino?: {7}\n" +
-                                    "- Intentó buscar origen duplicado en: {8}\n" +
-                                    "- Intentó buscar origen limpio en: {9}",
-                                    primerLog.ArchivoOriginal,
-                                    rutaLoc,
-                                    rutaAudLoc,
-                                    baseServ,
-                                    rutaLocRes,
-                                    destArch,
-                                    existeLoc ? "SÍ" : "NO",
-                                    existeDest ? "SÍ" : "NO",
-                                    string.IsNullOrEmpty(rutaA) ? "N/A" : rutaA,
-                                    string.IsNullOrEmpty(rutaB) ? "N/A" : rutaB
-                                );
-                            }
-
                             ejecutarEnUI(() =>
                             {
-                                MessageBox.Show("No se pudieron transferir los archivos al servidor central ssdirec. Verifique que la ruta de red de destino esté accesible y que su conexión de red sea estable." + detalleRutas, "Error de Sincronización", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                                MessageBox.Show("Fallo al subir archivos al servidor central por HTTP. Último error registrado:\n\n" + ModuloAuditoria.UltimoErrorSubidaPdf, "Error de Sincronización", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                             });
                         }
                         else
@@ -1629,23 +1542,6 @@ namespace CapturaNotarias
                     // Exportar de inmediato al JSON de red local como respaldo/sincronización
                     ServicioExportacionRed.ExportarARedLocal();
 
-                    // Escribir JSON consolidado en ssdirec para SyncAuditorias.php (L42)
-                    try
-                    {
-                        string rutaJsonCentral = Path.Combine(@"\\172.40.5.84\ssdirec", ModuloConfiguracion.TipoCaptura, "auditoria.json");
-                        string? directorioCentral = Path.GetDirectoryName(rutaJsonCentral);
-                        if (!string.IsNullOrEmpty(directorioCentral) && ExisteDirectorioConTimeout(directorioCentral, 1500))
-                        {
-                            var todosLosRegistros = ObtenerRegistrosTodos();
-                            var datosAEnviar = new { Registros = todosLosRegistros };
-                            string jsonConsolidado = JsonConvert.SerializeObject(datosAEnviar, Formatting.Indented);
-                            File.WriteAllText(rutaJsonCentral, jsonConsolidado);
-                        }
-                    }
-                    catch (Exception exCentralJson)
-                    {
-                        System.Diagnostics.Debug.WriteLine("No se pudo escribir el JSON consolidado en ssdirec: " + exCentralJson.Message);
-                    }
                 }
 
                 if (exito)
