@@ -126,7 +126,7 @@ namespace CapturaNotarias
             }
         }
 
-        private void BtnAceptar_Click(object? sender, EventArgs e)
+        private async void BtnAceptar_Click(object? sender, EventArgs e)
         {
             string pinIngresado = txtPin.Text.Trim();
             if (string.IsNullOrEmpty(pinIngresado))
@@ -135,23 +135,8 @@ namespace CapturaNotarias
                 return;
             }
 
-            // Obtener el PIN Maestro de usuarios.json
-            string pinMaestroCorrecto = "2003";
-            string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
-            
-            if (File.Exists(rutaUsuarios))
-            {
-                try
-                {
-                    string json = File.ReadAllText(rutaUsuarios);
-                    var datos = JsonConvert.DeserializeObject<DatosUsuarios>(json);
-                    if (datos != null && !string.IsNullOrEmpty(datos.PinMaestro))
-                    {
-                        pinMaestroCorrecto = datos.PinMaestro;
-                    }
-                }
-                catch { }
-            }
+            // Obtener el PIN Maestro desde la API HTTP
+            string pinMaestroCorrecto = await ServicioUsuarios.ObtenerPinMaestroAsync().ConfigureAwait(true);
 
             if (pinIngresado != pinMaestroCorrecto)
             {

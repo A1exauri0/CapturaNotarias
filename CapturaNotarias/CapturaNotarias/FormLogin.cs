@@ -129,41 +129,7 @@ namespace CapturaNotarias
             }
         }
 
-        private void InicializarUsuariosJson()
-        {
-            try
-            {
-                if (string.IsNullOrEmpty(ModuloConfiguracion.RutaServidorAuditoria)) return;
 
-                // Evitar congelamiento de la interfaz si la ruta de red no está accesible
-                if (!ExisteDirectorioConTimeout(ModuloConfiguracion.RutaServidorAuditoria, 1500))
-                {
-                    return;
-                }
-
-                string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
-                if (!File.Exists(rutaUsuarios))
-                {
-                    DatosUsuarios datos = new DatosUsuarios
-                    {
-                        PinMaestro = "2003",
-                        Usuarios = new List<Usuario>
-                        {
-                            new Usuario
-                            {
-                                Id = 1,
-                                NombreCompleto = "Administrador",
-                                NombreUsuario = "admin",
-                                Pin = "2003"
-                            }
-                        }
-                    };
-                    string json = JsonConvert.SerializeObject(datos, Formatting.Indented);
-                    File.WriteAllText(rutaUsuarios, json);
-                }
-            }
-            catch { }
-        }
 
         private void BtnConfig_Click(object? sender, EventArgs e)
         {
@@ -278,59 +244,19 @@ namespace CapturaNotarias
                 // Actualizar visibilidad de la advertencia
                 lblAdvertencia.Visible = ModuloConfiguracion.ActivarEnvioAuditoria;
                 
-                // Intentar autogenerar el archivo usuarios.json al guardar la ruta
-                InicializarUsuariosJson();
-                
                 MessageBox.Show("Configuración guardada correctamente.");
             }
         }
 
         private void BtnUsuarios_Click(object? sender, EventArgs e)
         {
-            // Asegurarnos de que el archivo exista en la ruta de red
-            InicializarUsuariosJson();
-
-            string pinMaestroCorrecto = "2003";
-            string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
-            
-            if (File.Exists(rutaUsuarios))
-            {
-                try
-                {
-                    string json = File.ReadAllText(rutaUsuarios);
-                    var datos = JsonConvert.DeserializeObject<DatosUsuarios>(json);
-                    if (datos != null && !string.IsNullOrEmpty(datos.PinMaestro))
-                    {
-                        pinMaestroCorrecto = datos.PinMaestro;
-                    }
-                }
-                catch { }
-            }
-
-            // Solicitar el PIN maestro al usuario
-            Form prompt = new Form() { Width = 300, Height = 150, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Acceso Administrador", StartPosition = FormStartPosition.CenterScreen };
-            Label textLabel = new Label() { Left = 20, Top = 10, Width = 250, Text = "Ingrese el PIN Maestro:" };
-            TextBox textBox = new TextBox() { Left = 20, Top = 35, Width = 240, PasswordChar = '*', MaxLength = 8 };
-            Button confirmation = new Button() { Text = "Aceptar", Left = 160, Width = 100, Top = 70, DialogResult = DialogResult.OK };
-            prompt.Controls.Add(textLabel);
-            prompt.Controls.Add(textBox);
-            prompt.Controls.Add(confirmation);
-            prompt.AcceptButton = confirmation;
-
-            if (prompt.ShowDialog() == DialogResult.OK)
-            {
-                if (textBox.Text == pinMaestroCorrecto)
-                {
-                    using (FormUsuarios frm = new FormUsuarios())
-                    {
-                        frm.ShowDialog();
-                    }
-                }
-                else
-                {
-                    MessageBox.Show("PIN Maestro incorrecto.", "Acceso Denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-            }
+            MessageBox.Show(
+                "La administración de usuarios se ha centralizado.\n" +
+                "Por favor, realice la gestión de capturistas directamente desde el Panel del Administrador en el Servidor.",
+                "Gestión Centralizada",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information
+            );
         }
 
         private void BtnAuditoria_Click(object? sender, EventArgs e)
@@ -341,27 +267,9 @@ namespace CapturaNotarias
                 frm.ShowDialog();
             }
         }
-        private void ItemExcel_Click(object? sender, EventArgs e)
+        private async void ItemExcel_Click(object? sender, EventArgs e)
         {
-            // Asegurarnos de que el archivo exista en la ruta de red
-            InicializarUsuariosJson();
-
-            string pinMaestroCorrecto = "2003";
-            string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
-            
-            if (File.Exists(rutaUsuarios))
-            {
-                try
-                {
-                    string json = File.ReadAllText(rutaUsuarios);
-                    var datos = JsonConvert.DeserializeObject<DatosUsuarios>(json);
-                    if (datos != null && !string.IsNullOrEmpty(datos.PinMaestro))
-                    {
-                        pinMaestroCorrecto = datos.PinMaestro;
-                    }
-                }
-                catch { }
-            }
+            string pinMaestroCorrecto = await ServicioUsuarios.ObtenerPinMaestroAsync().ConfigureAwait(true);
 
             // Solicitar el PIN maestro al usuario
             Form prompt = new Form() { Width = 300, Height = 150, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Acceso Autorizado", StartPosition = FormStartPosition.CenterScreen };
@@ -426,27 +334,9 @@ namespace CapturaNotarias
             }
         }
 
-        private void ItemEnviarRegistros_Click(object? sender, EventArgs e)
+        private async void ItemEnviarRegistros_Click(object? sender, EventArgs e)
         {
-            // Solicitar el PIN maestro al usuario para autorizar el envío de registros
-            InicializarUsuariosJson();
-
-            string pinMaestroCorrecto = "2003";
-            string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
-            
-            if (File.Exists(rutaUsuarios))
-            {
-                try
-                {
-                    string json = File.ReadAllText(rutaUsuarios);
-                    var datos = JsonConvert.DeserializeObject<DatosUsuarios>(json);
-                    if (datos != null && !string.IsNullOrEmpty(datos.PinMaestro))
-                    {
-                        pinMaestroCorrecto = datos.PinMaestro;
-                    }
-                }
-                catch { }
-            }
+            string pinMaestroCorrecto = await ServicioUsuarios.ObtenerPinMaestroAsync().ConfigureAwait(true);
 
             Form formularioPrompt = new Form() { Width = 300, Height = 150, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Acceso Autorizado", StartPosition = FormStartPosition.CenterScreen };
             Label etiquetaTexto = new Label() { Left = 20, Top = 10, Width = 250, Text = "Ingrese el PIN Maestro:" };
@@ -777,26 +667,9 @@ namespace CapturaNotarias
             catch { }
         }
 
-        private void ItemMigrarHistoricos_Click(object? sender, EventArgs e)
+        private async void ItemMigrarHistoricos_Click(object? sender, EventArgs e)
         {
-            InicializarUsuariosJson();
-
-            string pinMaestroCorrecto = "2003";
-            string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
-            
-            if (File.Exists(rutaUsuarios))
-            {
-                try
-                {
-                    string json = File.ReadAllText(rutaUsuarios);
-                    var datos = JsonConvert.DeserializeObject<DatosUsuarios>(json);
-                    if (datos != null && !string.IsNullOrEmpty(datos.PinMaestro))
-                    {
-                        pinMaestroCorrecto = datos.PinMaestro;
-                    }
-                }
-                catch { }
-            }
+            string pinMaestroCorrecto = await ServicioUsuarios.ObtenerPinMaestroAsync().ConfigureAwait(true);
 
             Form formularioPrompt = new Form() { Width = 300, Height = 150, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Acceso Autorizado", StartPosition = FormStartPosition.CenterScreen };
             Label etiquetaTexto = new Label() { Left = 20, Top = 10, Width = 250, Text = "Ingrese el PIN Maestro:" };
@@ -840,7 +713,7 @@ namespace CapturaNotarias
             }
         }
 
-        private void BtnLogin_Click(object? sender, EventArgs e)
+        private async void BtnLogin_Click(object? sender, EventArgs e)
         {
             string user = txtUsername.Text.Trim();
             string pin = txtPin.Text.Trim();
@@ -851,49 +724,29 @@ namespace CapturaNotarias
                 return;
             }
 
-            // Validar/Inicializar antes de leer
-            InicializarUsuariosJson();
+            Cursor.Current = Cursors.WaitCursor;
+            Usuario usuario = await ServicioUsuarios.LoginAsync(user, pin).ConfigureAwait(true);
+            Cursor.Current = Cursors.Default;
 
-            string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
-            
-            if (!File.Exists(rutaUsuarios))
+            if (usuario != null)
             {
-                // Modo fallback extremo
+                ModuloConfiguracion.UsuarioActual = usuario.NombreUsuario;
+                ModuloConfiguracion.NombreCompletoActual = usuario.NombreCompleto ?? usuario.NombreUsuario;
+                ModuloConfiguracion.TurnoActual = usuario.Turno ?? "Matutino";
+                IniciarApp();
+            }
+            else
+            {
+                // Modo fallback extremo fuera de línea (Admin temporal)
                 if (user == "admin" && pin == "1234")
                 {
                     ModuloConfiguracion.UsuarioActual = "admin";
-                    ModuloConfiguracion.NombreCompletoActual = "Administrador Local";
+                    ModuloConfiguracion.NombreCompletoActual = "Administrador Local (Offline)";
                     ModuloConfiguracion.TurnoActual = "Matutino";
                     IniciarApp();
                     return;
                 }
-                MessageBox.Show("No se pudo crear ni encontrar el archivo usuarios.json en: " + ModuloConfiguracion.RutaServidorAuditoria);
-                return;
-            }
-
-            try
-            {
-                string json = File.ReadAllText(rutaUsuarios);
-                var datos = JsonConvert.DeserializeObject<DatosUsuarios>(json);
-                if (datos != null && datos.Usuarios != null)
-                {
-                    foreach (var u in datos.Usuarios)
-                    {
-                        if (u.NombreUsuario != null && u.NombreUsuario.Equals(user, StringComparison.OrdinalIgnoreCase) && u.Pin == pin)
-                        {
-                            ModuloConfiguracion.UsuarioActual = u.NombreUsuario;
-                            ModuloConfiguracion.NombreCompletoActual = u.NombreCompleto ?? u.NombreUsuario;
-                            ModuloConfiguracion.TurnoActual = u.Turno ?? "Matutino";
-                            IniciarApp();
-                            return;
-                        }
-                    }
-                }
-                MessageBox.Show("Credenciales incorrectas.");
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Error leyendo usuarios: " + ex.Message);
+                MessageBox.Show("Credenciales incorrectas o el servidor no se encuentra disponible.");
             }
         }
 

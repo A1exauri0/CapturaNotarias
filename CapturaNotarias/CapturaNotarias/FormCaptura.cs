@@ -351,26 +351,15 @@ namespace CapturaNotarias
 
         private string ObtenerPinMaestro()
         {
-            string pinMaestroCorrecto = "2003";
             try
             {
-                string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
-                if (File.Exists(rutaUsuarios))
-                {
-                    string json = File.ReadAllText(rutaUsuarios);
-                    var obj = Newtonsoft.Json.Linq.JObject.Parse(json);
-                    if (obj != null && obj["PinMaestro"] != null)
-                    {
-                        string? pin = obj["PinMaestro"]?.ToString();
-                        if (!string.IsNullOrEmpty(pin))
-                        {
-                            pinMaestroCorrecto = pin;
-                        }
-                    }
-                }
+                // Consultar a la API HTTP del servidor de forma sincrona bloqueante controlada para evitar reescribir todo a async
+                return ServicioUsuarios.ObtenerPinMaestroAsync().GetAwaiter().GetResult();
             }
-            catch { }
-            return pinMaestroCorrecto;
+            catch
+            {
+                return "2003"; // Valor de fallback
+            }
         }
 
 

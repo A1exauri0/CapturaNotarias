@@ -148,30 +148,6 @@ namespace CapturaNotarias
             cboUsuario.Items.Clear();
             var listaNombres = new System.Collections.Generic.List<string>();
 
-            // 1. Intentar cargar desde usuarios.json en la red compartida
-            try
-            {
-                string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
-                if (File.Exists(rutaUsuarios))
-                {
-                    string json = File.ReadAllText(rutaUsuarios);
-                    var datos = Newtonsoft.Json.JsonConvert.DeserializeObject<DatosUsuarios>(json);
-                    if (datos != null && datos.Usuarios != null)
-                    {
-                        foreach (var u in datos.Usuarios)
-                        {
-                            string nombre = !string.IsNullOrEmpty(u.NombreCompleto) ? u.NombreCompleto : (u.NombreUsuario ?? "");
-                            nombre = nombre.Trim();
-                            if (!string.IsNullOrEmpty(nombre) && !listaNombres.Contains(nombre))
-                            {
-                                listaNombres.Add(nombre);
-                            }
-                        }
-                    }
-                }
-            }
-            catch { }
-
             // 2. Cargar/Complementar desde la base de datos local SQLite (los nombres completos reales)
             try
             {
