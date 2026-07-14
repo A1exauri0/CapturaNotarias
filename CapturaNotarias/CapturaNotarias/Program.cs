@@ -21,8 +21,7 @@ namespace CapturaNotarias
             // Reparar registros con Mojibake en la base de datos SQLite si los hay
             ServicioBaseDatos.RepararMojibakeBd();
 
-            // Migrar datos JSON existentes a SQLite (solo la primera vez)
-            MigradorJsonASqlite.EjecutarSiNecesario();
+
 
             // Iniciar el worker de conteo de páginas en background
             ServicioContadorPaginas.Iniciar();

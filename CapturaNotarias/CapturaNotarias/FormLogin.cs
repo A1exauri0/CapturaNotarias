@@ -42,43 +42,17 @@ namespace CapturaNotarias
             txtPin = new TextBox() { Location = new Point(160, 142), Width = 150, PasswordChar = '*', Font = fontGeneral };
 
             btnLogin = new Button() { Text = "Iniciar Sesión", Location = new Point(160, 195), Width = 220, Height = 40, BackColor = Color.LightBlue, FlatStyle = FlatStyle.Flat, Font = fontBold };
-            
             btnConfig = new Button() { Text = "⚙ Opciones", Location = new Point(345, 23), Width = 100, Height = 35, FlatStyle = FlatStyle.Flat, Font = new Font("Arial", 10.5F) };
 
-            // Configurar el menú desplegable (ContextMenuStrip) en el botón de engranaje
+            // Instanciar el ContextMenuStrip
             menuConfig = new ContextMenuStrip();
+ 
+            // Configurar el menú desplegable (ContextMenuStrip) en el botón de engranaje
             ToolStripMenuItem itemConfigServidor = new ToolStripMenuItem("⚙ Configuración...");
-            ToolStripMenuItem itemAdminUsuarios = new ToolStripMenuItem("👥 Administrar Usuarios...");
-            ToolStripMenuItem itemAuditoria = new ToolStripMenuItem("📊 Ver Productividad y Auditoría...");
-            ToolStripMenuItem itemExcel = new ToolStripMenuItem("📊 Descargar Reporte Excel...");
-            ToolStripMenuItem itemEnviarRegistros = new ToolStripMenuItem("🌐 Enviar Registros de Auditoría a Astronmx...");
-            ToolStripMenuItem itemEnviarPDFs = new ToolStripMenuItem("📁 Transferir Archivos PDF al Servidor Central...");
-            ToolStripMenuItem itemLugarTrabajo = new ToolStripMenuItem("📍 Cambiar Lugar de Trabajo...");
-            ToolStripMenuItem itemMigrarHistoricos = new ToolStripMenuItem("🔄 Importar/Verificar JSONs a Base de Datos...");
-            ToolStripMenuItem itemConsultaProductividad = new ToolStripMenuItem("🔎 Consultar Productividad por Usuario...");
-            ToolStripMenuItem itemRepararPaginas = new ToolStripMenuItem("🔄 Reparar Páginas de Capturas");
             
             itemConfigServidor.Click += BtnConfig_Click;
-            itemAdminUsuarios.Click += BtnUsuarios_Click;
-            itemAuditoria.Click += BtnAuditoria_Click;
-            itemExcel.Click += ItemExcel_Click;
-            itemEnviarRegistros.Click += ItemEnviarRegistros_Click;
-            itemEnviarPDFs.Click += ItemEnviarPDFs_Click;
-            itemLugarTrabajo.Click += ItemLugarTrabajo_Click;
-            itemMigrarHistoricos.Click += ItemMigrarHistoricos_Click;
-            itemConsultaProductividad.Click += ItemConsultaProductividad_Click;
-            itemRepararPaginas.Click += ItemRepararPaginas_Click;
             
             menuConfig.Items.Add(itemConfigServidor);
-            menuConfig.Items.Add(itemAdminUsuarios);
-            menuConfig.Items.Add(itemAuditoria);
-            menuConfig.Items.Add(itemExcel);
-            menuConfig.Items.Add(itemEnviarRegistros);
-            menuConfig.Items.Add(itemEnviarPDFs);
-            menuConfig.Items.Add(itemLugarTrabajo);
-            menuConfig.Items.Add(itemMigrarHistoricos);
-            menuConfig.Items.Add(itemConsultaProductividad);
-            menuConfig.Items.Add(itemRepararPaginas);
 
             btnConfig.Click += (s, e) => {
                 menuConfig.Show(btnConfig, new Point(0, btnConfig.Height));
@@ -182,7 +156,6 @@ namespace CapturaNotarias
                 }
             };
             
-            CheckBox chkEnvio = new CheckBox() { Left = 20, Top = 195, Width = 450, Text = "Activar envío automático de auditorías al servidor central", Checked = ModuloConfiguracion.ActivarEnvioAuditoria };
             
             Button confirmation = new Button() { Text = "Guardar", Left = 340, Width = 100, Top = 240, DialogResult = DialogResult.OK };
             
@@ -194,7 +167,6 @@ namespace CapturaNotarias
             prompt.Controls.Add(lugarComboBox);
             prompt.Controls.Add(tipoLabel);
             prompt.Controls.Add(tipoComboBox);
-            prompt.Controls.Add(chkEnvio);
             prompt.Controls.Add(confirmation);
             prompt.AcceptButton = confirmation;
 
@@ -222,7 +194,6 @@ namespace CapturaNotarias
                 string tipoSeleccionado = tipoComboBox.SelectedItem?.ToString() ?? "NOTARIAS";
 
                 ModuloConfiguracion.RutaServidorAuditoria = textBox.Text;
-                ModuloConfiguracion.ActivarEnvioAuditoria = chkEnvio.Checked;
                 ModuloConfiguracion.LugarTrabajo = lugarSeleccionado;
                 ModuloConfiguracion.TipoCaptura = tipoSeleccionado;
                 if (!string.IsNullOrEmpty(pcNombreValido))
@@ -232,7 +203,6 @@ namespace CapturaNotarias
                 
                 ConfiguracionApp conf = ModuloConfiguracion.CargarConfiguracion();
                 conf.RutaServidorAuditoria = textBox.Text;
-                conf.ActivarEnvioAuditoria = chkEnvio.Checked;
                 conf.LugarTrabajo = lugarSeleccionado;
                 conf.TipoCaptura = tipoSeleccionado;
                 if (!string.IsNullOrEmpty(pcNombreValido))
@@ -259,80 +229,7 @@ namespace CapturaNotarias
             );
         }
 
-        private void BtnAuditoria_Click(object? sender, EventArgs e)
-        {
-            // Opcional: También podrías pedir PIN maestro aquí si no quieres que cualquiera lo vea
-            using (FormAuditoria frm = new FormAuditoria())
-            {
-                frm.ShowDialog();
-            }
-        }
-        private async void ItemExcel_Click(object? sender, EventArgs e)
-        {
-            string pinMaestroCorrecto = await ServicioUsuarios.ObtenerPinMaestroAsync().ConfigureAwait(true);
 
-            // Solicitar el PIN maestro al usuario
-            Form prompt = new Form() { Width = 300, Height = 150, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Acceso Autorizado", StartPosition = FormStartPosition.CenterScreen };
-            Label textLabel = new Label() { Left = 20, Top = 10, Width = 250, Text = "Ingrese el PIN Maestro:" };
-            TextBox textBox = new TextBox() { Left = 20, Top = 35, Width = 240, PasswordChar = '*', MaxLength = 8 };
-            Button confirmation = new Button() { Text = "Aceptar", Left = 160, Width = 100, Top = 70, DialogResult = DialogResult.OK };
-            prompt.Controls.Add(textLabel);
-            prompt.Controls.Add(textBox);
-            prompt.Controls.Add(confirmation);
-            prompt.AcceptButton = confirmation;
-
-            if (prompt.ShowDialog() == DialogResult.OK)
-            {
-                if (textBox.Text == pinMaestroCorrecto)
-                {
-                    // Mostrar selector interactivo de rango de fechas
-                    using (Form selectorFechas = new Form() { Width = 320, Height = 200, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Rango del Reporte", StartPosition = FormStartPosition.CenterScreen, MaximizeBox = false, MinimizeBox = false })
-                    {
-                        Label lblInicio = new Label() { Left = 20, Top = 20, Width = 100, Text = "Fecha Inicio:", AutoSize = true };
-                        DateTimePicker dtpInicio = new DateTimePicker() { Left = 120, Top = 18, Width = 150, Format = DateTimePickerFormat.Short };
-
-                        Label lblFin = new Label() { Left = 20, Top = 60, Width = 100, Text = "Fecha Fin:", AutoSize = true };
-                        DateTimePicker dtpFin = new DateTimePicker() { Left = 120, Top = 58, Width = 150, Format = DateTimePickerFormat.Short };
-
-                        Button btnExportar = new Button() { Text = "Generar Excel", Left = 150, Width = 120, Top = 110, Height = 35, DialogResult = DialogResult.OK, FlatStyle = FlatStyle.System };
-
-                        // Rango por defecto: ultimos 7 dias
-                        dtpInicio.Value = DateTime.Today.AddDays(-7);
-                        dtpFin.Value = DateTime.Today;
-
-                        selectorFechas.Controls.Add(lblInicio);
-                        selectorFechas.Controls.Add(dtpInicio);
-                        selectorFechas.Controls.Add(lblFin);
-                        selectorFechas.Controls.Add(dtpFin);
-                        selectorFechas.Controls.Add(btnExportar);
-                        selectorFechas.AcceptButton = btnExportar;
-
-                        if (selectorFechas.ShowDialog() == DialogResult.OK)
-                        {
-                            DateTime inicio = dtpInicio.Value.Date;
-                            DateTime fin = dtpFin.Value.Date;
-
-                            var todos = ModuloAuditoria.ObtenerRegistrosTodos();
-                            // Filtrar los registros en base a la fecha del reporte adaptando el turno nocturno
-                            var filtrados = todos.Where(r => {
-                                string fechaStr = ModuloAuditoria.ObtenerFechaReporte(r);
-                                if (DateTime.TryParse(fechaStr, out DateTime rFecha))
-                                {
-                                    return rFecha.Date >= inicio && rFecha.Date <= fin;
-                                }
-                                return false;
-                            }).ToList();
-
-                            ModuloAuditoria.ExportarExcel(filtrados);
-                        }
-                    }
-                }
-                else
-                {
-                    MessageBox.Show("PIN Maestro incorrecto.", "Acceso Denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-            }
-        }
 
         private async void ItemEnviarRegistros_Click(object? sender, EventArgs e)
         {
@@ -370,27 +267,10 @@ namespace CapturaNotarias
             }
         }
 
-        private void ItemEnviarPDFs_Click(object? sender, EventArgs e)
+        private async void ItemEnviarPDFs_Click(object? sender, EventArgs e)
         {
             // Solicitar el PIN maestro al usuario para autorizar la transferencia de archivos PDF
-            InicializarUsuariosJson();
-
-            string pinMaestroCorrecto = "2003";
-            string rutaUsuarios = Path.Combine(ModuloConfiguracion.RutaServidorAuditoria, "usuarios.json");
-            
-            if (File.Exists(rutaUsuarios))
-            {
-                try
-                {
-                    string json = File.ReadAllText(rutaUsuarios);
-                    var datos = JsonConvert.DeserializeObject<DatosUsuarios>(json);
-                    if (datos != null && !string.IsNullOrEmpty(datos.PinMaestro))
-                    {
-                        pinMaestroCorrecto = datos.PinMaestro;
-                    }
-                }
-                catch { }
-            }
+            string pinMaestroCorrecto = await ServicioUsuarios.ObtenerPinMaestroAsync().ConfigureAwait(true);
 
             Form formularioPrompt = new Form() { Width = 300, Height = 150, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Acceso Autorizado", StartPosition = FormStartPosition.CenterScreen };
             Label etiquetaTexto = new Label() { Left = 20, Top = 10, Width = 250, Text = "Ingrese el PIN Maestro:" };
@@ -667,43 +547,7 @@ namespace CapturaNotarias
             catch { }
         }
 
-        private async void ItemMigrarHistoricos_Click(object? sender, EventArgs e)
-        {
-            string pinMaestroCorrecto = await ServicioUsuarios.ObtenerPinMaestroAsync().ConfigureAwait(true);
 
-            Form formularioPrompt = new Form() { Width = 300, Height = 150, FormBorderStyle = FormBorderStyle.FixedDialog, Text = "Acceso Autorizado", StartPosition = FormStartPosition.CenterScreen };
-            Label etiquetaTexto = new Label() { Left = 20, Top = 10, Width = 250, Text = "Ingrese el PIN Maestro:" };
-            TextBox cajaTexto = new TextBox() { Left = 20, Top = 35, Width = 240, PasswordChar = '*', MaxLength = 8 };
-            Button botonConfirmacion = new Button() { Text = "Aceptar", Left = 160, Width = 100, Top = 70, DialogResult = DialogResult.OK };
-            formularioPrompt.Controls.Add(etiquetaTexto);
-            formularioPrompt.Controls.Add(cajaTexto);
-            formularioPrompt.Controls.Add(botonConfirmacion);
-            formularioPrompt.AcceptButton = botonConfirmacion;
-
-            if (formularioPrompt.ShowDialog() == DialogResult.OK)
-            {
-                if (cajaTexto.Text == pinMaestroCorrecto)
-                {
-                    Cursor.Current = Cursors.WaitCursor;
-                    var result = ModuloAuditoria.MigrarJsonHistoricosASqlite();
-                    Cursor.Current = Cursors.Default;
-
-                    string msg = string.Format(
-                        "Proceso de importación/verificación finalizado:\n\n" +
-                        "• Archivos JSON encontrados: {0}\n" +
-                        "• Registros totales leídos: {1}\n" +
-                        "• Registros nuevos importados a SQLite: {2}\n" +
-                        "• Registros duplicados omitidos: {3}",
-                        result.archivos, result.leidos, result.importados, result.duplicados
-                    );
-                    MessageBox.Show(msg, "Resultado de Importación", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-                else
-                {
-                    MessageBox.Show("PIN Maestro incorrecto.", "Acceso Denegado", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-            }
-        }
 
         private void ItemLugarTrabajo_Click(object? sender, EventArgs e)
         {
@@ -770,8 +614,6 @@ namespace CapturaNotarias
             {
                 ModuloConfiguracion.RutaServidorAuditoria = conf.RutaServidorAuditoria;
             }
-            // Intentar inicializar al cargar la app si ya hay una ruta configurada
-            InicializarUsuariosJson();
 
             // Iniciar temporizador global de sincronización horaria
             InicializarSincronizacionGlobal();
@@ -822,13 +664,7 @@ namespace CapturaNotarias
             }
         }
 
-        private void ItemConsultaProductividad_Click(object? sender, EventArgs e)
-        {
-            using (var frm = new FormConsultaProductividad())
-            {
-                frm.ShowDialog();
-            }
-        }
+
 
         private void ItemRepararPaginas_Click(object? sender, EventArgs e)
         {

@@ -114,4 +114,23 @@ namespace CapturaNotarias
         [JsonProperty("pin_maestro")]
         public string? PinMaestro { get; set; }
     }
+
+    // Clase que representa la información de un capturista en el sistema C#
+    public class Usuario
+    {
+        [JsonProperty("id")]
+        public int Id { get; set; }
+
+        [JsonProperty("nombre_completo")]
+        public string? NombreCompleto { get; set; }
+
+        [JsonProperty("nombre_usuario")]
+        public string? NombreUsuario { get; set; }
+
+        [JsonProperty("pin")]
+        public string? Pin { get; set; }
+
+        [JsonProperty("turno")]
+        public string? Turno { get; set; }
+    }
 }
